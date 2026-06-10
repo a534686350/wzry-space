@@ -41,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File ".\sync-remotes.ps1" -BuildApk -CommitM
 服务器 SSH 远程更新源码：
 
 ```bash
-curl -fsSL https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh && bash /tmp/wzry-update.sh
+SRC=github; (curl -fsSL --connect-timeout 8 --max-time 25 https://raw.githubusercontent.com/a534686350/wzry-space/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh || { SRC=gitee; curl -fsSL --connect-timeout 8 --max-time 25 https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh; }) && bash /tmp/wzry-update.sh --source "$SRC"
 ```
 
 如果已经手动提交，只同步远端：

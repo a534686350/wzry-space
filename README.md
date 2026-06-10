@@ -63,13 +63,13 @@ powershell -ExecutionPolicy Bypass -File ".\sync-remotes.ps1" -BuildApk -CommitM
 服务器 SSH 里执行后一切按提示填写，包含授权码、域名、数据库密码、后台账号密码：
 
 ```bash
-curl -fsSL https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-install.sh -o /tmp/wzry-install.sh && bash /tmp/wzry-install.sh
+SRC=github; (curl -fsSL --connect-timeout 8 --max-time 25 https://raw.githubusercontent.com/a534686350/wzry-space/main/scripts/cloud-install.sh -o /tmp/wzry-install.sh || { SRC=gitee; curl -fsSL --connect-timeout 8 --max-time 25 https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-install.sh -o /tmp/wzry-install.sh; }) && bash /tmp/wzry-install.sh --source "$SRC"
 ```
 
 服务器后续 SSH 远程更新源码：
 
 ```bash
-curl -fsSL https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh && bash /tmp/wzry-update.sh
+SRC=github; (curl -fsSL --connect-timeout 8 --max-time 25 https://raw.githubusercontent.com/a534686350/wzry-space/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh || { SRC=gitee; curl -fsSL --connect-timeout 8 --max-time 25 https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh; }) && bash /tmp/wzry-update.sh --source "$SRC"
 ```
 
 ## 远程更新

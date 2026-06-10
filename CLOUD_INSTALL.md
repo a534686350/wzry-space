@@ -20,35 +20,23 @@
 全部搭建成功
 ```
 
-## 一键搭建命令：Gitee
+## 智能一键搭建命令
 
 在云服务器 SSH 窗口执行：
 
 ```bash
-curl -fsSL https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-install.sh -o /tmp/wzry-install.sh && bash /tmp/wzry-install.sh
+SRC=github; (curl -fsSL --connect-timeout 8 --max-time 25 https://raw.githubusercontent.com/a534686350/wzry-space/main/scripts/cloud-install.sh -o /tmp/wzry-install.sh || { SRC=gitee; curl -fsSL --connect-timeout 8 --max-time 25 https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-install.sh -o /tmp/wzry-install.sh; }) && bash /tmp/wzry-install.sh --source "$SRC"
 ```
 
-脚本启动后会让你输入安装授权码、后台账号、数据库密码等信息。
-
-## 一键搭建命令：GitHub
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/a534686350/wzry-space/main/scripts/cloud-install.sh -o /tmp/wzry-install.sh && bash /tmp/wzry-install.sh --source github
-```
+这条命令会先尝试 GitHub；GitHub 网络不好时自动切换到 Gitee。脚本启动后会让你输入安装授权码、后台账号、数据库密码等信息。
 
 ## SSH 远程更新源码
 
 以后发了新版本，服务器 SSH 里执行下面命令即可更新源码、前台、后台、APK、数据库升级 SQL，并重载服务：
 
-Gitee 更新：
+智能更新：
 ```bash
-curl -fsSL https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh && bash /tmp/wzry-update.sh
-```
-
-GitHub 更新：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/a534686350/wzry-space/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh && bash /tmp/wzry-update.sh --source github
+SRC=github; (curl -fsSL --connect-timeout 8 --max-time 25 https://raw.githubusercontent.com/a534686350/wzry-space/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh || { SRC=gitee; curl -fsSL --connect-timeout 8 --max-time 25 https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh; }) && bash /tmp/wzry-update.sh --source "$SRC"
 ```
 
 ## 安装过程中会问什么
@@ -154,7 +142,7 @@ WebSocket 端口是：  8888 / 9999
 以后推荐执行专用更新命令：
 
 ```bash
-curl -fsSL https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh && bash /tmp/wzry-update.sh
+SRC=github; (curl -fsSL --connect-timeout 8 --max-time 25 https://raw.githubusercontent.com/a534686350/wzry-space/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh || { SRC=gitee; curl -fsSL --connect-timeout 8 --max-time 25 https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh; }) && bash /tmp/wzry-update.sh --source "$SRC"
 ```
 
 更新脚本会保留：
