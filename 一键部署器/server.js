@@ -3,6 +3,7 @@
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
+const crypto = require('crypto');
 const express = require('express');
 const { Server: SocketIOServer } = require('socket.io');
 const { Client } = require('ssh2');
@@ -57,14 +58,21 @@ const OPS_STEPS = [
 ];
 const OPS_INSTALL_CODE =
   (process.env.OPS_INSTALL_CODE || process.env.WZRY_INSTALL_CODE || 'hlin..00').trim();
-// 可选：设置访问码，防止部署器被陌生人滥用
-// 不设置则所有人都能使用；建议在公网部署时设置
+// 旧 ACCESS_CODE 仅做兼容：部署入口使用一次性卡密，后台管理使用 ADMIN_PASSWORD。
 const ACCESS_CODE = (process.env.ACCESS_CODE || '').trim();
 const ACCESS_HINT = (process.env.ACCESS_HINT || '').trim();
+const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || 'admin').trim() || 'admin';
+const ADMIN_PASSWORD =
+  (process.env.ADMIN_PASSWORD || process.env.RECORD_ADMIN_PASSWORD || ACCESS_CODE || '').trim();
+const ADMIN_SESSION_TTL_MS = Math.max(1800000, Number(process.env.ADMIN_SESSION_TTL_MS || 43200000) || 43200000);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const DEPLOY_RECORDS_FILE =
   process.env.DEPLOY_RECORDS_FILE || path.join(DATA_DIR, 'deploy-records.json');
+const DEPLOY_CARDS_FILE =
+  process.env.DEPLOY_CARDS_FILE || path.join(DATA_DIR, 'deploy-cards.json');
 const MAX_DEPLOY_RECORDS = Math.max(50, Number(process.env.MAX_DEPLOY_RECORDS || 500) || 500);
+const CARD_RUNNING_TTL_MS = Math.max(600000, Number(process.env.CARD_RUNNING_TTL_MS || 7200000) || 7200000);
+const adminSessions = new Map();
 
 // 启动时校验 payload 目录
 if (!fs.existsSync(PAYLOAD_ROOT)) {
@@ -92,19 +100,46 @@ for (const variant of Object.values(PAYLOAD_VARIANTS)) {
 const app = express();
 app.use(express.json({ limit: '256kb' }));
 
-app.get('/ip.html', (req, res) => {
-  res.type('html').send(renderDeployRecordsPage());
+app.get('/admin', (req, res) => {
+  res.type('html').send(renderAdminPage());
 });
 
-app.get('/api/deploy-records', (req, res) => {
-  if (!hasAccess(req)) {
-    res.status(401).json({ ok: false, message: '访问码不正确' });
+app.post('/api/admin/login', (req, res) => {
+  if (!ADMIN_PASSWORD) {
+    res.status(503).json({ ok: false, message: '后台密码未配置，请在服务环境变量设置 ADMIN_PASSWORD' });
     return;
   }
+  const username = String((req.body && req.body.username) || '').trim();
+  const password = String((req.body && req.body.password) || '');
+  if (!safeEqual(username, ADMIN_USERNAME) || !safeEqual(password, ADMIN_PASSWORD)) {
+    res.status(401).json({ ok: false, message: '后台账号或密码不正确' });
+    return;
+  }
+  res.json({ ok: true, token: createAdminSession(), ttlMs: ADMIN_SESSION_TTL_MS });
+});
+
+app.post('/api/admin/logout', (req, res) => {
+  const token = adminTokenFromReq(req);
+  if (token) adminSessions.delete(token);
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/summary', requireAdmin, (req, res) => {
   res.json({
     ok: true,
-    accessRequired: !!ACCESS_CODE,
+    adminConfigured: !!ADMIN_PASSWORD,
     records: loadDeployRecords(),
+    cards: publicDeployCards(loadDeployCards()),
+  });
+});
+
+app.post('/api/admin/cards', requireAdmin, (req, res) => {
+  const quantity = Math.max(1, Math.min(100, Number(req.body && req.body.quantity) || 1));
+  const note = String((req.body && req.body.note) || '').trim().slice(0, 120);
+  const cards = createDeployCards(quantity, note);
+  res.json({
+    ok: true,
+    cards,
   });
 });
 
@@ -114,11 +149,13 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, payloadRoot: PAYLOAD_ROOT, variants: publicVariants() });
 });
 
-// 前端启动时读取：是否需要访问码（不暴露 code 本身）
+// 前端启动时读取公开元信息
 app.get('/api/meta', (req, res) => {
   res.json({
-    accessRequired: !!ACCESS_CODE,
-    accessHint: ACCESS_CODE ? ACCESS_HINT : '',
+    accessRequired: false,
+    accessHint: '',
+    cardRequired: true,
+    adminPath: '/admin',
     version: '1.0.0',
     variants: publicVariants(),
   });
@@ -128,19 +165,6 @@ const server = http.createServer(app);
 const io = new SocketIOServer(server, {
   cors: { origin: '*' },
   maxHttpBufferSize: 1e6,
-});
-
-// 访问码认证中间件
-io.use((socket, next) => {
-  if (!ACCESS_CODE) return next();
-  const provided =
-    (socket.handshake.auth && socket.handshake.auth.accessCode) ||
-    (socket.handshake.query && socket.handshake.query.accessCode) ||
-    '';
-  if (String(provided) === ACCESS_CODE) return next();
-  const err = new Error('ACCESS_DENIED');
-  err.data = { code: 'ACCESS_DENIED' };
-  return next(err);
 });
 
 // 每个 socket 最多一个并行任务
@@ -162,6 +186,16 @@ io.on('connection', (socket) => {
       return;
     }
 
+    const cardLock = acquireDeployCard(creds.deployCard, {
+      socketId: socket.id,
+      host: creds.host,
+      deployMode: creds.deployMode,
+    });
+    if (!cardLock.ok) {
+      socket.emit('deploy:error', { message: cardLock.message });
+      return;
+    }
+
     const jobState = { cancelled: false };
     activeJobs.set(socket.id, {
       cancel: () => {
@@ -171,9 +205,11 @@ io.on('connection', (socket) => {
 
     const emit = makeEmitter(socket);
     emit.step('init', 'running', '开始部署任务');
-    emit.log('info', `目标服务器: ${creds.host}:${creds.port}  用户: ${creds.username}`);
+    emit.log('info', `部署卡密验证通过，本次成功后将自动失效`);
+    emit.log('info', `目标服务器信息已接收，SSH 端口: ${creds.port}  用户: ${creds.username}`);
     emit.log('info', `部署版本: ${variantLabel(creds.deployMode)}`);
 
+    let completed = false;
     try {
       let deployMeta = {};
       if (creds.deployMode === 'ops') {
@@ -195,9 +231,16 @@ io.on('connection', (socket) => {
         static80: buildSiteUrl(creds.host, creds.sitePort),
         site: buildSiteUrl(creds.host, creds.sitePort),
       };
+      const record = buildDeployRecord(creds, urls, deployMeta);
+      consumeDeployCard(cardLock.card.id, cardLock.lockId, {
+        recordId: record.id,
+        host: creds.host,
+        deployMode: creds.deployMode,
+      });
+      completed = true;
       try {
-        saveDeployRecord(buildDeployRecord(creds, urls, deployMeta));
-        emit.log('success', '部署信息已保存到 /ip.html');
+        saveDeployRecord(record);
+        emit.log('success', '部署信息已保存到后台管理');
       } catch (recordErr) {
         emit.log('warn', `部署成功，但保存部署信息失败: ${recordErr.message || recordErr}`);
       }
@@ -209,6 +252,7 @@ io.on('connection', (socket) => {
       emit.step('done', 'failed', msg);
       socket.emit('deploy:error', { message: msg });
     } finally {
+      if (!completed) releaseDeployCard(cardLock.card.id, cardLock.lockId);
       activeJobs.delete(socket.id);
     }
   });
@@ -218,6 +262,11 @@ io.on('connection', (socket) => {
     const validation = validateCreds(creds);
     if (!validation.ok) {
       socket.emit('test:result', { ok: false, error: validation.message });
+      return;
+    }
+    const cardCheck = checkDeployCard(creds.deployCard);
+    if (!cardCheck.ok) {
+      socket.emit('test:result', { ok: false, error: cardCheck.message });
       return;
     }
 
@@ -393,6 +442,7 @@ function sanitizeCreds(payload) {
   const p = payload || {};
   const deployMode = ['clean', 'card', 'ops'].includes(p.deployMode) ? p.deployMode : 'clean';
   return {
+    deployCard: String(p.deployCard || '').trim(),
     host: String(p.host || '').trim(),
     port: Number(p.port || 22),
     username: String(p.username || '').trim(),
@@ -414,6 +464,8 @@ function sanitizeCreds(payload) {
 }
 
 function validateCreds(c) {
+  if (!c.deployCard) return { ok: false, message: '请先填写部署卡密' };
+  if (c.deployCard.length > 80) return { ok: false, message: '部署卡密格式不合法' };
   if (!c.host) return { ok: false, message: '服务器地址不能为空' };
   if (!/^[a-zA-Z0-9\.\-\_]+$/.test(c.host)) return { ok: false, message: '服务器地址格式不合法' };
   if (!Number.isInteger(c.port) || c.port < 1 || c.port > 65535) return { ok: false, message: 'SSH 端口不合法' };
@@ -439,14 +491,212 @@ function validateCreds(c) {
   return { ok: true };
 }
 
-function hasAccess(req) {
-  if (!ACCESS_CODE) return true;
-  const provided =
-    (req.query && req.query.accessCode) ||
-    req.get('x-access-code') ||
-    (req.body && req.body.accessCode) ||
-    '';
-  return String(provided).trim() === ACCESS_CODE;
+function requireAdmin(req, res, next) {
+  const token = adminTokenFromReq(req);
+  if (!token || !isAdminSessionValid(token)) {
+    res.status(401).json({ ok: false, message: '请先登录后台' });
+    return;
+  }
+  next();
+}
+
+function adminTokenFromReq(req) {
+  const auth = String(req.get('authorization') || '');
+  const bearer = auth.match(/^Bearer\s+(.+)$/i);
+  return (
+    (bearer && bearer[1]) ||
+    req.get('x-admin-token') ||
+    (req.query && req.query.adminToken) ||
+    (req.body && req.body.adminToken) ||
+    ''
+  );
+}
+
+function createAdminSession() {
+  cleanupAdminSessions();
+  const token = crypto.randomBytes(32).toString('hex');
+  adminSessions.set(token, Date.now() + ADMIN_SESSION_TTL_MS);
+  return token;
+}
+
+function isAdminSessionValid(token) {
+  cleanupAdminSessions();
+  const expiresAt = adminSessions.get(token);
+  if (!expiresAt || expiresAt < Date.now()) {
+    adminSessions.delete(token);
+    return false;
+  }
+  return true;
+}
+
+function cleanupAdminSessions() {
+  const now = Date.now();
+  for (const [token, expiresAt] of adminSessions.entries()) {
+    if (expiresAt < now) adminSessions.delete(token);
+  }
+}
+
+function safeEqual(a, b) {
+  const av = Buffer.from(String(a || ''), 'utf8');
+  const bv = Buffer.from(String(b || ''), 'utf8');
+  if (av.length !== bv.length) return false;
+  return crypto.timingSafeEqual(av, bv);
+}
+
+function loadJsonArray(file) {
+  try {
+    if (!fs.existsSync(file)) return [];
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.error(`[data] 读取失败 ${file}:`, err.message || err);
+    return [];
+  }
+}
+
+function saveJsonArray(file, rows) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(rows, null, 2), 'utf8');
+  try { fs.chmodSync(file, 0o600); } catch (_) {}
+}
+
+function loadDeployCards() {
+  return cleanupDeployCards(loadJsonArray(DEPLOY_CARDS_FILE));
+}
+
+function saveDeployCards(cards) {
+  saveJsonArray(DEPLOY_CARDS_FILE, cards);
+}
+
+function cleanupDeployCards(cards) {
+  const now = Date.now();
+  let changed = false;
+  for (const card of cards) {
+    if (card.status === 'running' && card.lockedAt && now - Date.parse(card.lockedAt) > CARD_RUNNING_TTL_MS) {
+      card.status = 'unused';
+      delete card.lockId;
+      delete card.lockedAt;
+      delete card.lockedBy;
+      delete card.pendingTarget;
+      changed = true;
+    }
+  }
+  if (changed) saveDeployCards(cards);
+  return cards;
+}
+
+function createDeployCards(quantity, note) {
+  const cards = loadDeployCards();
+  const created = [];
+  for (let i = 0; i < quantity; i += 1) {
+    let code;
+    do {
+      code = generateDeployCardCode();
+    } while (cards.some((c) => c.code === code));
+    const card = {
+      id: crypto.randomBytes(12).toString('hex'),
+      code,
+      status: 'unused',
+      note: note || '',
+      createdAt: new Date().toISOString(),
+    };
+    cards.unshift(card);
+    created.push(card);
+  }
+  saveDeployCards(cards);
+  return publicDeployCards(created);
+}
+
+function publicDeployCards(cards) {
+  return cards.map((card) => ({
+    id: card.id,
+    code: card.code,
+    status: card.status || 'unused',
+    note: card.note || '',
+    createdAt: card.createdAt || '',
+    lockedAt: card.lockedAt || '',
+    usedAt: card.usedAt || '',
+    usedRecordId: card.usedRecordId || '',
+    usedHost: card.usedHost || '',
+    deployMode: card.deployMode || '',
+  }));
+}
+
+function generateDeployCardCode() {
+  const a = crypto.randomBytes(3).toString('hex').toUpperCase();
+  const b = crypto.randomBytes(3).toString('hex').toUpperCase();
+  const c = crypto.randomBytes(2).toString('hex').toUpperCase();
+  return `DEP-${a}-${b}-${c}`;
+}
+
+function checkDeployCard(code) {
+  const value = String(code || '').trim();
+  if (!value) return { ok: false, message: '请先填写部署卡密' };
+  const cards = loadDeployCards();
+  const card = cards.find((c) => c.code === value);
+  if (!card) return { ok: false, message: '部署卡密不存在' };
+  if (card.status === 'used') return { ok: false, message: '部署卡密已使用' };
+  if (card.status === 'running') return { ok: false, message: '部署卡密正在使用中，请等待当前任务结束' };
+  return { ok: true, card };
+}
+
+function acquireDeployCard(code, meta) {
+  const value = String(code || '').trim();
+  if (!value) return { ok: false, message: '请先填写部署卡密' };
+  const cards = loadDeployCards();
+  const card = cards.find((c) => c.code === value);
+  if (!card) return { ok: false, message: '部署卡密不存在' };
+  if (card.status === 'used') return { ok: false, message: '部署卡密已使用' };
+  if (card.status === 'running') return { ok: false, message: '部署卡密正在使用中，请等待当前任务结束' };
+  const lockId = crypto.randomBytes(16).toString('hex');
+  card.status = 'running';
+  card.lockId = lockId;
+  card.lockedAt = new Date().toISOString();
+  card.lockedBy = meta.socketId || '';
+  card.pendingTarget = maskHost(meta.host || '');
+  card.deployMode = meta.deployMode || '';
+  saveDeployCards(cards);
+  return { ok: true, card: { id: card.id, code: card.code }, lockId };
+}
+
+function consumeDeployCard(cardId, lockId, meta) {
+  const cards = loadDeployCards();
+  const card = cards.find((c) => c.id === cardId);
+  if (!card || card.lockId !== lockId) return false;
+  card.status = 'used';
+  card.usedAt = new Date().toISOString();
+  card.usedRecordId = meta.recordId || '';
+  card.usedHost = meta.host || '';
+  card.deployMode = meta.deployMode || card.deployMode || '';
+  delete card.lockId;
+  delete card.lockedAt;
+  delete card.lockedBy;
+  delete card.pendingTarget;
+  saveDeployCards(cards);
+  return true;
+}
+
+function releaseDeployCard(cardId, lockId) {
+  const cards = loadDeployCards();
+  const card = cards.find((c) => c.id === cardId);
+  if (!card || card.lockId !== lockId || card.status !== 'running') return false;
+  card.status = 'unused';
+  delete card.lockId;
+  delete card.lockedAt;
+  delete card.lockedBy;
+  delete card.pendingTarget;
+  saveDeployCards(cards);
+  return true;
+}
+
+function maskHost(host) {
+  const value = String(host || '');
+  if (!value) return '';
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value)) {
+    const parts = value.split('.');
+    return `${parts[0]}.${parts[1]}.*.*`;
+  }
+  return value.replace(/^(.{2}).+(.{2})$/, '$1***$2');
 }
 
 function loadDeployRecords() {
@@ -465,6 +715,7 @@ function saveDeployRecord(record) {
   const records = loadDeployRecords();
   const next = [record, ...records].slice(0, MAX_DEPLOY_RECORDS);
   fs.writeFileSync(DEPLOY_RECORDS_FILE, JSON.stringify(next, null, 2), 'utf8');
+  try { fs.chmodSync(DEPLOY_RECORDS_FILE, 0o600); } catch (_) {}
 }
 
 function buildDeployRecord(creds, urls, deployMeta = {}) {
@@ -543,88 +794,211 @@ function parseEnvText(raw) {
   return out;
 }
 
-function renderDeployRecordsPage() {
-  const accessRequired = !!ACCESS_CODE;
+function renderAdminPage() {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>部署记录</title>
+  <title>部署后台</title>
   <style>
     *{box-sizing:border-box}body{margin:0;background:#0b1020;color:#e8eefc;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
-    .wrap{max-width:1280px;margin:0 auto;padding:28px 18px 48px}.top{display:flex;gap:16px;align-items:flex-end;justify-content:space-between;margin-bottom:18px}
-    h1{margin:0;font-size:26px;letter-spacing:0}.muted{color:#93a4bd;font-size:13px}.panel{background:#111a2e;border:1px solid #22304c;border-radius:8px;padding:14px;margin-bottom:14px}
-    .auth{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.auth input{height:38px;min-width:220px;border:1px solid #314568;background:#070b16;color:#e8eefc;border-radius:6px;padding:0 12px}
-    button{height:38px;border:0;border-radius:6px;background:#38bdf8;color:#06111f;font-weight:700;padding:0 14px;cursor:pointer}.ghost{background:#1e293b;color:#d8e5f8}
-    .status{min-height:20px;margin-top:8px;color:#fbbf24;font-size:13px}.table-wrap{overflow:auto;border:1px solid #22304c;border-radius:8px;background:#0f172a}
-    table{width:100%;border-collapse:collapse;min-width:1180px}th,td{padding:10px 12px;border-bottom:1px solid #22304c;text-align:left;vertical-align:top;font-size:13px}
-    th{position:sticky;top:0;background:#16233a;color:#bfdbfe;z-index:1}td code{color:#bae6fd;word-break:break-all}.secret{color:#fef3c7}.empty{padding:34px;text-align:center;color:#93a4bd}
-    .note{max-width:240px;color:#a7b6ce;line-height:1.5}.copy{height:28px;padding:0 10px;font-size:12px}.toolbar{display:flex;gap:10px;align-items:center;justify-content:space-between;margin:12px 0}
+    .wrap{max-width:1320px;margin:0 auto;padding:28px 18px 48px}.top{display:flex;gap:16px;align-items:flex-end;justify-content:space-between;margin-bottom:18px}
+    h1{margin:0;font-size:26px;letter-spacing:0}.muted{color:#93a4bd;font-size:13px}.hidden{display:none!important}
+    .panel{background:#111a2e;border:1px solid #22304c;border-radius:8px;padding:14px;margin-bottom:14px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    input{height:38px;min-width:180px;border:1px solid #314568;background:#070b16;color:#e8eefc;border-radius:6px;padding:0 12px}
+    input[type=number]{min-width:90px}button,a.btn{height:38px;border:0;border-radius:6px;background:#38bdf8;color:#06111f;font-weight:700;padding:0 14px;cursor:pointer;display:inline-flex;align-items:center;text-decoration:none}
+    .ghost{background:#1e293b!important;color:#d8e5f8!important}.danger{background:#ef4444!important;color:white!important}.status{min-height:20px;margin-top:8px;color:#fbbf24;font-size:13px}
+    .stats{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;margin:12px 0}.stat{background:#0f172a;border:1px solid #22304c;border-radius:8px;padding:12px}.stat strong{display:block;font-size:22px;color:#bae6fd}
+    .table-wrap{overflow:auto;border:1px solid #22304c;border-radius:8px;background:#0f172a;margin-top:10px}table{width:100%;border-collapse:collapse;min-width:1180px}
+    th,td{padding:10px 12px;border-bottom:1px solid #22304c;text-align:left;vertical-align:top;font-size:13px}th{position:sticky;top:0;background:#16233a;color:#bfdbfe;z-index:1}
+    code{color:#bae6fd;word-break:break-all}.secret{color:#fef3c7}.empty{padding:34px;text-align:center;color:#93a4bd}.note{max-width:260px;color:#a7b6ce;line-height:1.5}
+    .copy{height:28px;padding:0 10px;font-size:12px}.section-title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:18px}.section-title h2{font-size:18px;margin:0}
+    .new-cards{white-space:pre-wrap;line-height:1.7;background:#07111f;border:1px solid #22304c;border-radius:8px;padding:12px;color:#dbeafe;max-height:220px;overflow:auto}
+    @media(max-width:760px){.top{align-items:flex-start;flex-direction:column}.stats{grid-template-columns:1fr 1fr}table{min-width:980px}}
   </style>
 </head>
 <body>
   <main class="wrap">
     <div class="top">
       <div>
-        <h1>部署成功记录</h1>
-        <div class="muted">只记录部署成功的服务器信息、SSH、数据库、后台账号和 APP 路径。</div>
+        <h1>一键部署后台</h1>
+        <div class="muted">生成一次性部署卡密，查看已部署成功的服务器、数据库、后台和 APP 信息。</div>
       </div>
-      <button class="ghost" id="refreshBtn">刷新</button>
+      <div class="row">
+        <a class="btn ghost" href="/">返回部署页</a>
+        <button class="ghost hidden" id="refreshBtn">刷新</button>
+        <button class="danger hidden" id="logoutBtn">退出</button>
+      </div>
     </div>
-    <section class="panel">
-      <form class="auth" id="authForm">
-        <label for="accessCode">访问码</label>
-        <input id="accessCode" type="password" autocomplete="current-password" placeholder="${accessRequired ? '请输入部署器访问码' : '当前未启用访问码'}">
-        <button type="submit">查看记录</button>
-        <button type="button" class="ghost" id="clearCode">清除访问码</button>
+
+    <section class="panel" id="loginPanel">
+      <form class="row" id="loginForm">
+        <label for="adminUser">后台账号</label>
+        <input id="adminUser" autocomplete="username" value="${ADMIN_USERNAME.replace(/"/g, '&quot;')}">
+        <label for="adminPass">后台密码</label>
+        <input id="adminPass" type="password" autocomplete="current-password">
+        <button type="submit">登录后台</button>
       </form>
       <div class="status" id="status"></div>
     </section>
-    <div class="toolbar">
-      <div class="muted" id="countText">等待加载</div>
-      <button class="ghost" id="copyAll">复制全部</button>
-    </div>
-    <section class="table-wrap" id="records"></section>
+
+    <section id="adminPanel" class="hidden">
+      <div class="stats">
+        <div class="stat"><span class="muted">部署记录</span><strong id="recordCount">0</strong></div>
+        <div class="stat"><span class="muted">未使用卡密</span><strong id="unusedCount">0</strong></div>
+        <div class="stat"><span class="muted">已使用卡密</span><strong id="usedCount">0</strong></div>
+        <div class="stat"><span class="muted">进行中</span><strong id="runningCount">0</strong></div>
+      </div>
+
+      <section class="panel">
+        <div class="section-title">
+          <h2>生成部署卡密</h2>
+          <button class="ghost" id="copyNewCards">复制新卡密</button>
+        </div>
+        <form class="row" id="cardForm">
+          <label for="cardQty">数量</label>
+          <input id="cardQty" type="number" min="1" max="100" value="1">
+          <label for="cardNote">备注</label>
+          <input id="cardNote" placeholder="客户/用途，可留空">
+          <button type="submit">生成卡密</button>
+        </form>
+        <div class="status" id="cardStatus"></div>
+        <pre class="new-cards hidden" id="newCards"></pre>
+      </section>
+
+      <section>
+        <div class="section-title">
+          <h2>卡密列表</h2>
+          <span class="muted">成功部署后自动失效</span>
+        </div>
+        <div class="table-wrap" id="cards"></div>
+      </section>
+
+      <section>
+        <div class="section-title">
+          <h2>已部署服务器信息</h2>
+          <button class="ghost" id="copyAll">复制全部部署记录</button>
+        </div>
+        <div class="table-wrap" id="records"></div>
+      </section>
+    </section>
   </main>
   <script>
-    const accessRequired = ${JSON.stringify(accessRequired)};
     const els = {
-      form: document.getElementById('authForm'),
-      code: document.getElementById('accessCode'),
+      loginPanel: document.getElementById('loginPanel'),
+      adminPanel: document.getElementById('adminPanel'),
+      loginForm: document.getElementById('loginForm'),
+      adminUser: document.getElementById('adminUser'),
+      adminPass: document.getElementById('adminPass'),
       status: document.getElementById('status'),
+      cardForm: document.getElementById('cardForm'),
+      cardQty: document.getElementById('cardQty'),
+      cardNote: document.getElementById('cardNote'),
+      cardStatus: document.getElementById('cardStatus'),
+      newCards: document.getElementById('newCards'),
+      cards: document.getElementById('cards'),
       records: document.getElementById('records'),
-      count: document.getElementById('countText'),
       refresh: document.getElementById('refreshBtn'),
-      clear: document.getElementById('clearCode'),
+      logout: document.getElementById('logoutBtn'),
       copyAll: document.getElementById('copyAll'),
+      copyNewCards: document.getElementById('copyNewCards'),
+      recordCount: document.getElementById('recordCount'),
+      unusedCount: document.getElementById('unusedCount'),
+      usedCount: document.getElementById('usedCount'),
+      runningCount: document.getElementById('runningCount'),
     };
     let latestRecords = [];
-    els.code.value = sessionStorage.getItem('radar.recordsAccessCode') || sessionStorage.getItem('radar.accessCode') || '';
+    let latestCards = [];
+    let latestNewCards = [];
+    let token = sessionStorage.getItem('radar.adminToken') || '';
     function esc(v){return String(v ?? '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
     function value(v){return v ? '<code>'+esc(v)+'</code>' : '<span class="muted">-</span>';}
     function secret(v){return v ? '<code class="secret">'+esc(v)+'</code>' : '<span class="muted">-</span>';}
     function fmtTime(v){try{return new Date(v).toLocaleString('zh-CN',{hour12:false});}catch(_){return v || '';}}
-    async function loadRecords(){
-      const code = els.code.value.trim();
-      const headers = {};
-      if (code) headers['x-access-code'] = code;
-      els.status.textContent = '正在读取记录...';
-      const res = await fetch('/api/deploy-records', {headers, cache:'no-store'});
+    function authHeaders(){return {'content-type':'application/json','x-admin-token':token};}
+    function showAuthed(ok){
+      els.loginPanel.classList.toggle('hidden', ok);
+      els.adminPanel.classList.toggle('hidden', !ok);
+      els.refresh.classList.toggle('hidden', !ok);
+      els.logout.classList.toggle('hidden', !ok);
+    }
+    async function login(){
+      els.status.textContent = '正在登录...';
+      const res = await fetch('/api/admin/login', {
+        method:'POST',
+        headers:{'content-type':'application/json'},
+        body: JSON.stringify({username: els.adminUser.value.trim(), password: els.adminPass.value})
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        els.status.textContent = data.message || '登录失败';
+        return;
+      }
+      token = data.token;
+      sessionStorage.setItem('radar.adminToken', token);
+      els.adminPass.value = '';
+      showAuthed(true);
+      await loadSummary();
+    }
+    async function loadSummary(){
+      const res = await fetch('/api/admin/summary', {headers:authHeaders(), cache:'no-store'});
       if (res.status === 401) {
-        els.status.textContent = '访问码不正确，请重新输入。';
-        els.records.innerHTML = '<div class="empty">需要正确访问码才能查看部署记录</div>';
-        els.count.textContent = '未授权';
+        sessionStorage.removeItem('radar.adminToken');
+        token = '';
+        showAuthed(false);
+        els.status.textContent = '请重新登录后台。';
         return;
       }
       const data = await res.json();
       latestRecords = data.records || [];
-      if (code) sessionStorage.setItem('radar.recordsAccessCode', code);
-      render(latestRecords);
-      els.status.textContent = latestRecords.length ? '读取完成' : '暂无部署成功记录';
+      latestCards = data.cards || [];
+      renderCards(latestCards);
+      renderRecords(latestRecords);
+      renderStats();
     }
-    function render(records){
-      els.count.textContent = '共 ' + records.length + ' 条记录';
+    async function createCards(){
+      els.cardStatus.textContent = '正在生成...';
+      const res = await fetch('/api/admin/cards', {
+        method:'POST',
+        headers:authHeaders(),
+        body: JSON.stringify({quantity: Number(els.cardQty.value || 1), note: els.cardNote.value.trim()})
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        els.cardStatus.textContent = data.message || '生成失败';
+        return;
+      }
+      latestNewCards = data.cards || [];
+      els.newCards.textContent = latestNewCards.map(c => c.code).join('\\n');
+      els.newCards.classList.toggle('hidden', !latestNewCards.length);
+      els.cardStatus.textContent = '已生成 ' + latestNewCards.length + ' 张部署卡密';
+      await loadSummary();
+    }
+    function renderStats(){
+      els.recordCount.textContent = latestRecords.length;
+      els.unusedCount.textContent = latestCards.filter(c => c.status === 'unused').length;
+      els.usedCount.textContent = latestCards.filter(c => c.status === 'used').length;
+      els.runningCount.textContent = latestCards.filter(c => c.status === 'running').length;
+    }
+    function renderCards(cards){
+      if (!cards.length) {
+        els.cards.innerHTML = '<div class="empty">暂无卡密，请先生成</div>';
+        return;
+      }
+      const statusText = {unused:'未使用', running:'部署中', used:'已使用'};
+      els.cards.innerHTML = '<table><thead><tr><th>卡密</th><th>状态</th><th>备注</th><th>生成时间</th><th>使用时间</th><th>部署版本</th><th>操作</th></tr></thead><tbody>' +
+        cards.map((c, i) => '<tr>' +
+          '<td>'+secret(c.code)+'</td>' +
+          '<td>'+esc(statusText[c.status] || c.status || '')+'</td>' +
+          '<td>'+esc(c.note || '')+'</td>' +
+          '<td>'+esc(fmtTime(c.createdAt))+'</td>' +
+          '<td>'+esc(fmtTime(c.usedAt || c.lockedAt || ''))+'</td>' +
+          '<td>'+esc(c.deployMode || '')+'</td>' +
+          '<td><button class="copy" data-card="'+i+'">复制</button></td>' +
+        '</tr>').join('') + '</tbody></table>';
+    }
+    function renderRecords(records){
       if (!records.length) {
         els.records.innerHTML = '<div class="empty">暂无部署成功记录</div>';
         return;
@@ -669,18 +1043,34 @@ function renderDeployRecordsPage() {
     }
     async function copyText(text){try{await navigator.clipboard.writeText(text);}catch(_){const t=document.createElement('textarea');t.value=text;document.body.appendChild(t);t.select();document.execCommand('copy');t.remove();}}
     document.addEventListener('click', e => {
-      const btn = e.target.closest('[data-copy]');
-      if (!btn) return;
-      copyText(recordText(latestRecords[Number(btn.dataset.copy)] || {}));
+      const recordBtn = e.target.closest('[data-copy]');
+      const cardBtn = e.target.closest('[data-card]');
+      if (!recordBtn && !cardBtn) return;
+      const btn = recordBtn || cardBtn;
+      const text = recordBtn
+        ? recordText(latestRecords[Number(recordBtn.dataset.copy)] || {})
+        : ((latestCards[Number(cardBtn.dataset.card)] || {}).code || '');
+      copyText(text);
       btn.textContent = '已复制';
       setTimeout(() => btn.textContent = '复制', 1200);
     });
-    els.form.addEventListener('submit', e => {e.preventDefault(); loadRecords().catch(err => els.status.textContent = err.message || '读取失败');});
-    els.refresh.addEventListener('click', () => loadRecords().catch(err => els.status.textContent = err.message || '读取失败'));
-    els.clear.addEventListener('click', () => {sessionStorage.removeItem('radar.recordsAccessCode'); els.code.value='';});
+    els.loginForm.addEventListener('submit', e => {e.preventDefault(); login().catch(err => els.status.textContent = err.message || '登录失败');});
+    els.cardForm.addEventListener('submit', e => {e.preventDefault(); createCards().catch(err => els.cardStatus.textContent = err.message || '生成失败');});
+    els.refresh.addEventListener('click', () => loadSummary().catch(err => els.status.textContent = err.message || '读取失败'));
+    els.logout.addEventListener('click', async () => {
+      try { await fetch('/api/admin/logout', {method:'POST', headers:authHeaders()}); } catch (_) {}
+      sessionStorage.removeItem('radar.adminToken');
+      token = '';
+      showAuthed(false);
+    });
     els.copyAll.addEventListener('click', () => copyText(latestRecords.map(recordText).join('\\n\\n---\\n\\n')));
-    if (!accessRequired || els.code.value) loadRecords().catch(err => els.status.textContent = err.message || '读取失败');
-    else { els.status.textContent = '请输入访问码查看记录。'; els.records.innerHTML = '<div class="empty">等待访问码</div>'; }
+    els.copyNewCards.addEventListener('click', () => copyText(latestNewCards.map(c => c.code).join('\\n')));
+    if (token) {
+      showAuthed(true);
+      loadSummary().catch(() => showAuthed(false));
+    } else {
+      showAuthed(false);
+    }
   </script>
 </body>
 </html>`;
@@ -895,11 +1285,10 @@ function makeEmitter(socket) {
 
 server.listen(PORT, HOST, () => {
   console.log(`[OK] 一键部署器已启动: http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
-  console.log('    在浏览器里打开上面地址，填入 SSH 信息即可部署');
-  if (ACCESS_CODE) {
-    console.log(`[SEC] 已启用访问码保护 (ACCESS_CODE 长度=${ACCESS_CODE.length})`);
+  console.log('    在浏览器里打开上面地址，输入一次性部署卡密和 SSH 信息即可部署');
+  if (ADMIN_PASSWORD) {
+    console.log(`[SEC] 后台管理已启用，账号: ${ADMIN_USERNAME}`);
   } else {
-    console.log('[SEC] 未启用访问码保护，任何访问者都可使用');
-    console.log('     如需保护，启动时设置环境变量：ACCESS_CODE=你的密码 npm start');
+    console.log('[SEC] 后台管理密码未配置，请设置 ADMIN_PASSWORD');
   }
 });

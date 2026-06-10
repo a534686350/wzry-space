@@ -895,8 +895,9 @@ code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monosp
 
     <nav class="trust-nav">
         <span class="trust-pill"><span class="ic">🔐</span>SSH 加密传输</span>
-        <span class="trust-pill"><span class="ic">💾</span>密码零落盘</span>
+        <span class="trust-pill"><span class="ic">🎫</span>一次性卡密部署</span>
         <span class="trust-pill"><span class="ic">📜</span>全程日志可审</span>
+        <a class="trust-pill" href="/admin" style="text-decoration:none;color:inherit;"><span class="ic">⚙️</span>后台管理</a>
     </nav>
 
     <div class="conn-chip" id="connChip">
@@ -920,6 +921,12 @@ code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monosp
 
                 <form id="deployForm" autocomplete="off">
                     <div class="form-grid">
+                        <div class="field full">
+                            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 4v6c0 5-3 8-7 10-4-2-7-5-7-10V6l7-4z"/><path d="M9 12l2 2 4-4"/></svg>
+                            <input type="password" id="f-deploy-card" name="deployCard" placeholder=" " required autocomplete="one-time-code">
+                            <label for="f-deploy-card">部署卡密</label>
+                        </div>
+
                         <div class="field full">
                             <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M22 12a10 10 0 0 0-10-10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z"/></svg>
                             <input type="text" id="f-host" name="host" placeholder=" " required spellcheck="false" autocapitalize="off">
@@ -1112,7 +1119,7 @@ code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monosp
     <!-- DONE MESSAGE -->
     <div id="doneMsg" style="display:none;text-align:center;padding:20px 0;">
         <div style="font-size:18px;color:#4ade80;font-weight:600;">✅ 已全部完成部署任务</div>
-        <div id="doneIp" style="margin-top:8px;font-size:14px;color:#6fd3ff;"></div>
+        <div id="doneIp" style="margin-top:8px;font-size:14px;color:#6fd3ff;">部署信息已保存到后台管理</div>
     </div>
 
 </main>
@@ -1122,37 +1129,14 @@ code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monosp
     <div class="foot-links">
         <span>SSH 加密</span>
         <span>·</span>
-        <span>密码零落盘</span>
+        <span>一次性卡密</span>
         <span>·</span>
         <span>v1.0.0</span>
     </div>
 </footer>
 
-<!-- Access Code Modal (only shown when server enforces it) -->
-<div class="modal-mask hidden" id="accessModal">
-    <div class="modal">
-        <h3>🔑 需要访问码</h3>
-        <p>部署器已启用访问码保护，请输入访问码以继续使用。</p>
-        <div class="access-hint" id="accessHint"></div>
-        <form id="accessForm" autocomplete="off">
-            <div class="field">
-                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                <input type="password" id="accessCode" placeholder=" " required autocomplete="new-password">
-                <label for="accessCode">访问码</label>
-            </div>
-            <div class="err" id="accessErr">访问码错误</div>
-            <div class="actions">
-                <button type="submit" class="deploy-btn">
-                    <span>进入</span>
-                    <span class="btn-arrow">→</span>
-                </button>
-            </div>
-        </form>
-    </div>
-</div>
-
 <script src="/socket.io/socket.io.js"></script>
-<script src="/app.js?v=7"></script>
+<script src="/app.js?v=8"></script>
 
 </body>
 </html>
