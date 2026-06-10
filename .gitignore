@@ -26,9 +26,9 @@ APP/wzry_overlay_apk/*.keystore
 *.jks
 *.keystore
 
-# APK artifacts: keep only the current public release package
+# APK artifacts: keep public release packages
 *.apk
-!**/ALinRadar-v6.1.11.apk
+!网页前后台/apk/ALinRadar-v[0-9]*.[0-9]*.[0-9]*.apk
 
 # OS/editor noise
 .DS_Store
