@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>游戏雷达</title>
+    <script>
+        (function () {
+            try {
+                var p = (window.location.pathname || '').toLowerCase();
+                if (p.endsWith('/index.html') || p === '/' || p === '') {
+                    var target = window.location.href.replace(/index\.html(?=$|[?#])/i, 'index.php');
+                    if (/\/$/.test(target)) target += 'index.php';
+                    if (!/index\.php(?:$|[?#])/i.test(target)) {
+                        target = target.replace(/\/?(?=$|[?#])/, '/index.php');
+                    }
+                    window.location.replace(target);
+                }
+            } catch (e) {}
+        })();
+    </script>
+</head>
+<body>
+    <p style="text-align:center;color:#aaa;margin-top:40vh;font-family:sans-serif">正在跳转...</p>
+</body>
+</html>

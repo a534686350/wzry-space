@@ -1,0 +1,18 @@
+[Unit]
+Description=恢复 WebSocket 端口 IP 白名单（从数据库）
+# 必须在网络和数据库就绪后才运行
+After=network.target mysql.service mariadb.service mysqld.service
+Wants=mysql.service mariadb.service
+
+[Service]
+Type=oneshot
+# ===== 修改为你的实际路径 =====
+ExecStart=/bin/bash /www/wwwroot/你的站点目录/restore-whitelist.sh
+# ==============================
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=restore-whitelist
+
+[Install]
+WantedBy=multi-user.target

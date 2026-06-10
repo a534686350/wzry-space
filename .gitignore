@@ -1,0 +1,37 @@
+# Logs and runtime output
+*.log
+logs/
+*/logs/
+
+# Local database/runtime config
+APP/auth/config.php
+网页前后台/auth/config.php
+APP/wzry_overlay_apk/yuanma/config.php
+
+# Install/runtime markers
+APP/auth/install.lock
+网页前后台/auth/install.lock
+
+# Android/Gradle generated files
+**/.gradle/
+**/build/
+APP/wzry_overlay_apk/local.properties
+
+# Bundled toolchains and SDK caches
+APP/wzry_overlay_apk/tools/
+
+# Signing secrets
+APP/wzry_overlay_apk/keystore.properties
+APP/wzry_overlay_apk/*.keystore
+*.jks
+*.keystore
+
+# APK artifacts: keep only the current public release package
+*.apk
+!**/ALinRadar-v6.1.11.apk
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak

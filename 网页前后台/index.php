@@ -1,0 +1,5583 @@
+<?php
+// Fallback API router for servers that rewrite /api/index.php to /index.php.
+// If requests with `module` param hit this file, route them to the real API core.
+$module = isset($_GET['module']) ? trim((string) $_GET['module']) : '';
+if ($module === '' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $raw = file_get_contents('php://input');
+    $input = json_decode($raw, true);
+    if (is_array($input) && isset($input['module'])) $module = trim((string) $input['module']);
+    if ($module === '' && isset($_POST['module'])) $module = trim((string) $_POST['module']);
+}
+if ($module !== '') {
+    define('API_MODULE', $module);
+    require __DIR__ . '/api/core.php';
+    exit;
+}
+?>
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>游戏雷达</title>
+    <style>
+        /* 全局样式 */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #0a0e27 0%, #131833 50%, #0f1419 100%);
+            background-attachment: fixed;
+            color: #e0e0e0;
+            line-height: 1.6;
+            overflow-x: hidden;
+            min-height: 100vh;
+            position: relative;
+        }
+        
+        /* 背景装饰效果 - 静态光晕（移除动画减少GPU开销） */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                radial-gradient(circle at 20% 30%, rgba(74, 158, 255, 0.1) 0%, transparent 40%),
+                radial-gradient(circle at 80% 70%, rgba(255, 68, 68, 0.08) 0%, transparent 40%);
+            pointer-events: none;
+            z-index: 0;
+            opacity: 0.85;
+        }
+        
+        /* 静态星空背景（移除闪烁动画减少GPU开销） */
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                radial-gradient(1px 1px at 20% 30%, rgba(255,255,255,0.6), transparent),
+                radial-gradient(1px 1px at 60% 70%, rgba(255,255,255,0.5), transparent),
+                radial-gradient(1px 1px at 80% 10%, rgba(255,255,255,0.4), transparent),
+                radial-gradient(1px 1px at 90% 60%, rgba(255,255,255,0.5), transparent),
+                radial-gradient(1px 1px at 40% 20%, rgba(255,255,255,0.4), transparent),
+                radial-gradient(1px 1px at 85% 80%, rgba(255,255,255,0.5), transparent);
+            background-repeat: repeat;
+            background-size: 200px 200px;
+            opacity: 0.3;
+            pointer-events: none;
+            z-index: 0;
+        }
+        
+        .container {
+            position: relative;
+            z-index: 1;
+        }
+        
+        /* 背景装饰（移除blur(80px)+float动画，改为静态轻量光晕） */
+        .bg-decoration {
+            position: fixed;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            z-index: 0;
+            overflow: hidden;
+        }
+        
+        /* 主容器 */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            min-height: 100vh;
+            transition: all 0.3s ease;
+        }
+
+        /* 隐藏侧边栏时的样式 */
+        .container.sidebar-hidden {
+            grid-template-columns: 1fr;
+            max-width: 1400px;
+        }
+
+        .container.sidebar-hidden .sidebar {
+            display: none;
+        }
+        
+        /* 头部 */
+        .header {
+            grid-column: 1 / -1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: linear-gradient(135deg, rgba(47, 54, 60, 0.97) 0%, rgba(26, 31, 36, 0.97) 100%);
+            border: 1px solid rgba(74, 158, 255, 0.2);
+            border-radius: 16px;
+            padding: 20px 25px;
+            margin-bottom: 10px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .header h1 {
+            color: #fff;
+            font-size: 24px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #ffffff 0%, #4a9eff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-shadow: 0 0 30px rgba(74, 158, 255, 0.5);
+            letter-spacing: 0.5px;
+        }
+        
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+            color: #999;
+        }
+        
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #4a9eff;
+            box-shadow: 0 0 6px rgba(74, 158, 255, 0.6);
+            position: relative;
+        }
+        
+        .status-indicator.disconnected {
+            background: #ff4444;
+            box-shadow: 0 0 6px rgba(255, 68, 68, 0.6);
+        }
+        
+        /* 雷达地图 */
+        .radar {
+            background: linear-gradient(135deg, rgba(47, 54, 60, 0.97) 0%, rgba(26, 31, 36, 0.97) 100%);
+            border: 1px solid rgba(74, 158, 255, 0.2);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.4),
+                0 0 0 1px rgba(74, 158, 255, 0.1),
+                inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            transition: border-color 0.2s ease;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        /* 雷达地图全屏状态（覆盖整个窗口） */
+        .radar-fullscreen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            margin: 0;
+            border-radius: 0;
+            padding: 20px;
+            z-index: 9999;
+        }
+        
+        body.radar-fullscreen-active {
+            overflow: hidden;
+        }
+        
+        /* 小地图全屏按钮 */
+        .radar-fullscreen-toggle {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            z-index: 10;
+            padding: 4px 10px;
+            font-size: 12px;
+            color: #e5e7eb;
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(148, 163, 184, 0.7);
+            border-radius: 999px;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        
+        .radar-fullscreen-toggle:hover {
+            color: #f9fafb;
+            background: rgba(37, 99, 235, 0.9);
+            border-color: rgba(59, 130, 246, 0.9);
+        }
+        
+        /* 兵线方向修正（绕地图中心每次旋转90°） */
+        .minion-lane-fix-btn {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            z-index: 10;
+            padding: 4px 10px;
+            font-size: 12px;
+            color: #e5e7eb;
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(251, 191, 36, 0.65);
+            border-radius: 999px;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        
+        .minion-lane-fix-btn:hover {
+            color: #fffbeb;
+            background: rgba(180, 83, 9, 0.85);
+            border-color: rgba(251, 191, 36, 0.95);
+        }
+        
+        .radar::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: radial-gradient(circle at center, rgba(74, 158, 255, 0.05) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        
+        .radar:hover {
+            border-color: rgba(74, 158, 255, 0.35);
+        }
+        
+        canvas {
+            /* 动态尺寸，根据map文件自适应；底图由 JS drawImage 绘制，避免与 clearRect 透明层合成时白闪 */
+            width: 100%;
+            height: auto;
+            max-width: 100%;
+            max-height: 100%;
+            background-color: #1a1f24;
+            border-radius: 12px;
+            display: block;
+            margin: 0 auto;
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+            object-fit: contain;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(74, 158, 255, 0.2);
+        }
+        
+        /* 侧边栏 */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        /* 面板样式 */
+        .panel {
+            background: linear-gradient(135deg, rgba(47, 54, 60, 0.97) 0%, rgba(26, 31, 36, 0.97) 100%);
+            border: 1px solid rgba(74, 158, 255, 0.2);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .panel:hover {
+            border-color: rgba(74, 158, 255, 0.35);
+        }
+        
+        .panel h3 {
+            margin-bottom: 18px;
+            font-size: 18px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #4a9eff 0%, #6bb6ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            border-bottom: 2px solid rgba(74, 158, 255, 0.3);
+            padding-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        /* 可折叠面板（账号信息 / 英雄技能等） */
+        .panel.panel-collapsible {
+            padding: 0;
+            overflow: visible;
+        }
+        
+        .panel-collapsible-toggle {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 16px 20px;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            text-align: left;
+            font-family: inherit;
+            box-sizing: border-box;
+            border-bottom: 1px solid rgba(74, 158, 255, 0.15);
+            transition: background 0.2s ease;
+        }
+        
+        .panel-collapsible-toggle:hover {
+            background: rgba(74, 158, 255, 0.08);
+        }
+        
+        .panel-collapsible-title {
+            font-size: 16px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #4a9eff 0%, #6bb6ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .panel-collapsible-icon {
+            flex-shrink: 0;
+            font-size: 12px;
+            color: #94a3b8;
+            transition: transform 0.2s ease;
+        }
+        
+        .panel-collapsible-content {
+            padding: 0 20px 16px;
+        }
+        
+        .hero-skill-hint {
+            font-size: 12px;
+            color: #94a3b8;
+            line-height: 1.5;
+            margin: 12px 0 14px;
+        }
+
+        .hero-skill-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 8px;
+        }
+
+        .hero-skill-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 8px 10px;
+            border-radius: 10px;
+            background: rgba(15, 23, 42, 0.55);
+            border: 1px solid rgba(74, 158, 255, 0.2);
+        }
+
+        .hero-skill-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        .hero-skill-icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            object-fit: cover;
+            flex-shrink: 0;
+            background: rgba(15, 23, 42, 0.9);
+            border: 1px solid rgba(148, 163, 184, 0.35);
+        }
+
+        .hero-skill-icon.hero-skill-icon--dim {
+            opacity: 0.55;
+            filter: grayscale(0.25);
+        }
+
+        .hero-skill-icon.hero-skill-icon--blank {
+            display: inline-block;
+            vertical-align: middle;
+            box-sizing: border-box;
+            background: rgba(30, 41, 59, 0.45);
+            border: 1px dashed rgba(100, 116, 139, 0.5);
+        }
+
+        .hero-skill-name {
+            font-size: 13px;
+            color: #dbeafe;
+            white-space: nowrap;
+        }
+
+        .hero-skill-value {
+            font-size: 13px;
+            color: #e2e8f0;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .hero-skill-root {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 12px;
+            margin-top: 4px;
+        }
+
+        .hero-skill-empty {
+            font-size: 13px;
+            color: #94a3b8;
+            padding: 8px 0;
+        }
+
+        .hero-skill-block {
+            border-radius: 12px;
+            border: 1px solid rgba(74, 158, 255, 0.22);
+            background: rgba(15, 23, 42, 0.5);
+            overflow: hidden;
+        }
+        .hero-skill-block.hero-skill-block--dead {
+            border-color: rgba(148, 163, 184, 0.35);
+            background: rgba(15, 23, 42, 0.35);
+            opacity: 0.6;
+        }
+        .hero-skill-block.hero-skill-block--dead * {
+            opacity: 0.95;
+        }
+
+        .hero-skill-block-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            background: rgba(30, 41, 59, 0.5);
+            border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+        }
+
+        .hero-skill-mini-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid rgba(148, 163, 184, 0.45);
+            flex-shrink: 0;
+            background: #1e293b;
+        }
+        .hero-skill-mini-avatar.hero-skill-mini-avatar--dead {
+            filter: grayscale(0.8);
+            opacity: 0.6;
+            border-color: rgba(148, 163, 184, 0.5);
+        }
+
+        .hero-skill-block-head-text {
+            min-width: 0;
+            flex: 1;
+        }
+
+        .hero-skill-block-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #f1f5f9;
+            line-height: 1.25;
+            white-space: nowrap;
+        }
+
+        .hero-skill-block-meta {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-top: 3px;
+        }
+
+        .hero-skill-badge {
+            display: inline-block;
+            font-size: 11px;
+            padding: 2px 7px;
+            border-radius: 6px;
+            margin-left: 6px;
+            vertical-align: middle;
+        }
+
+        .hero-skill-badge.blue {
+            background: rgba(59, 130, 246, 0.35);
+            color: #bfdbfe;
+        }
+
+        .hero-skill-badge.red {
+            background: rgba(239, 68, 68, 0.28);
+            color: #fecaca;
+        }
+
+        .hero-skill-block-rows {
+            padding: 6px 10px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        
+        .map-offset-block {
+            margin-bottom: 8px;
+        }
+
+        .map-offset-block-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #e2e8f0;
+            margin-bottom: 6px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid rgba(74, 158, 255, 0.2);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .map-offset-block-title::before {
+            content: '';
+            width: 3px;
+            height: 12px;
+            background: linear-gradient(180deg, #4a9eff, #6bb6ff);
+            border-radius: 2px;
+        }
+
+        .map-offset-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 6px;
+            font-size: 11px;
+            color: #d1d5db;
+            padding: 4px;
+            background: rgba(15, 23, 42, 0.4);
+            border-radius: 4px;
+            transition: all 0.2s ease;
+        }
+
+        .map-offset-row:hover {
+            background: rgba(15, 23, 42, 0.6);
+        }
+
+        .map-offset-row label {
+            flex: 0 0 20px;
+            min-width: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            color: #cbd5e1;
+            background: rgba(74, 158, 255, 0.1);
+            padding: 3px 6px;
+            border-radius: 3px;
+        }
+
+        .map-offset-row input[type="range"] {
+            flex: 1;
+            min-width: 0;
+            height: 4px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: rgba(74, 158, 255, 0.2);
+            border-radius: 2px;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .map-offset-row input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            background: linear-gradient(135deg, #4a9eff, #6bb6ff);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(74, 158, 255, 0.5);
+            transition: all 0.2s ease;
+        }
+
+        .map-offset-row input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.15);
+            box-shadow: 0 3px 10px rgba(74, 158, 255, 0.7);
+        }
+
+        .map-offset-row input[type="range"]::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            background: linear-gradient(135deg, #4a9eff, #6bb6ff);
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 6px rgba(74, 158, 255, 0.5);
+        }
+
+        .map-offset-row input[type="range"]::-moz-range-thumb:hover {
+            transform: scale(1.15);
+            box-shadow: 0 3px 10px rgba(74, 158, 255, 0.7);
+        }
+
+        .map-offset-val {
+            min-width: 32px;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+            color: #e2e8f0;
+            font-weight: 600;
+            font-size: 11px;
+            padding: 3px 6px;
+            background: rgba(74, 158, 255, 0.15);
+            border-radius: 4px;
+        }
+
+        .map-calib-reset {
+            width: 100%;
+            margin-top: 10px;
+            padding: 8px 12px;
+            border: 1px solid rgba(148, 163, 184, 0.45);
+            border-radius: 6px;
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(220, 38, 38, 0.15));
+            color: #fca5a5;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 6px rgba(239, 68, 68, 0.2);
+        }
+
+        .map-calib-reset:hover {
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.3), rgba(220, 38, 38, 0.25));
+            border-color: rgba(239, 68, 68, 0.6);
+            color: #fff;
+            box-shadow: 0 3px 10px rgba(239, 68, 68, 0.4);
+            transform: translateY(-1px);
+        }
+
+        .map-calib-reset:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 4px rgba(239, 68, 68, 0.3);
+        }
+
+        /* 侧边栏切换按钮（固定在右侧顶部，可拖动） */
+        .sidebar-toggle-btn {
+            position: fixed;
+            right: 0;
+            top: 0;
+            width: 40px;
+            height: 70px;
+            background: rgba(74, 158, 255, 0.9);
+            border: none;
+            border-radius: 0 0 0 8px;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: move;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            writing-mode: vertical-rl;
+            text-orientation: mixed;
+            box-shadow: -2px 0 8px rgba(0, 0, 0, 0.3);
+            transition: background 0.3s ease;
+            user-select: none;
+        }
+
+        .sidebar-toggle-btn:hover {
+            background: rgba(59, 130, 246, 1);
+        }
+
+        .sidebar-toggle-btn.show-sidebar {
+            background: rgba(34, 197, 94, 0.9);
+        }
+
+        .sidebar-toggle-btn.show-sidebar:hover {
+            background: rgba(22, 163, 74, 1);
+        }
+
+        .sidebar-toggle-btn.dragging {
+            cursor: grabbing;
+            opacity: 0.8;
+        }
+
+        /* 悬浮工具栏按钮组 */
+        .floating-toolbar {
+            position: fixed;
+            right: 0;
+            top: 80px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            z-index: 10000;
+        }
+
+        .floating-toolbar-btn {
+            width: 36px;
+            height: 40px;
+            background: rgba(74, 158, 255, 0.9);
+            border: none;
+            border-radius: 6px 0 0 6px;
+            color: #fff;
+            font-size: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            writing-mode: vertical-rl;
+            text-orientation: mixed;
+            box-shadow: -2px 0 6px rgba(0, 0, 0, 0.3);
+            transition: all 0.2s ease;
+        }
+
+        .floating-toolbar-btn:hover {
+            background: rgba(59, 130, 246, 1);
+            width: 42px;
+        }
+
+        .floating-toolbar-btn.fullscreen-btn {
+            background: rgba(139, 92, 246, 0.9);
+        }
+
+        .floating-toolbar-btn.fullscreen-btn:hover {
+            background: rgba(124, 58, 237, 1);
+        }
+
+        .floating-toolbar-btn.minion-fix-btn {
+            background: rgba(251, 191, 36, 0.9);
+        }
+
+        .floating-toolbar-btn.minion-fix-btn:hover {
+            background: rgba(245, 158, 11, 1);
+        }
+
+        .share-link-flow {
+            font-size: 12px;
+            color: #cbd5e1;
+            line-height: 1.7;
+            margin-bottom: 10px;
+        }
+
+        .share-link-flow ol {
+            margin: 0 0 8px 18px;
+            padding: 0;
+        }
+
+        .share-link-flow li {
+            margin-bottom: 4px;
+        }
+
+        .share-link-controls {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .share-link-btn {
+            flex: 1;
+            height: 34px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            color: #fff;
+            font-size: 13px;
+            font-weight: 600;
+            background: linear-gradient(90deg, #2563eb, #3b82f6);
+        }
+
+        .share-link-btn.copy {
+            background: linear-gradient(90deg, #10b981, #22c55e);
+        }
+
+        .share-link-output {
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid rgba(74, 158, 255, 0.35);
+            background: rgba(15, 23, 42, 0.65);
+            color: #e2e8f0;
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 12px;
+            margin-bottom: 6px;
+        }
+
+        .share-link-tip {
+            font-size: 12px;
+            color: #94a3b8;
+            line-height: 1.6;
+        }
+        
+        /* 列表项 */
+        .list {
+            list-style: none;
+            max-height: 250px;
+            overflow-y: auto;
+        }
+        
+        .list-item {
+            padding: 12px 15px;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, rgba(51, 51, 51, 0.9) 0%, rgba(40, 40, 40, 0.9) 100%);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background-color 0.2s ease, border-left-color 0.2s ease;
+            border-left: 3px solid #4a9eff;
+            color: #e0e0e0;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            position: relative;
+            overflow: hidden;
+            will-change: auto; /* 优化渲染性能 */
+            max-width: 100%;
+            width: 100%;
+            box-sizing: border-box;
+            word-break: break-all;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            overflow: hidden;
+        }
+        
+        .list-item:hover {
+            background: linear-gradient(135deg, rgba(74, 158, 255, 0.15) 0%, rgba(58, 58, 58, 0.8) 100%);
+            border-left-color: #6bb6ff;
+        }
+        
+        .list-item.active {
+            background: linear-gradient(135deg, rgba(74, 158, 255, 0.25) 0%, rgba(74, 158, 255, 0.15) 100%);
+            border-left-color: #6bb6ff;
+            box-shadow: 0 2px 8px rgba(74, 158, 255, 0.3);
+        }
+        
+        /* 英雄信息 */
+        .hero-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px;
+            background: #333;
+            border-radius: 4px;
+            margin-bottom: 6px;
+            transition: background-color 0.2s ease;
+        }
+        
+        .hero-item:hover {
+            background: #3a3a3a;
+        }
+        
+        .hero-item.enemy {
+            border-left: 3px solid #ff4444;
+        }
+        
+        .hero-item.ally {
+            border-left: 3px solid #4a9eff;
+        }
+        
+        .hero-avatar {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border: 2px solid #4a9eff;
+            object-fit: cover;
+        }
+        
+        .hero-item.enemy .hero-avatar {
+            border-color: #ff4444;
+        }
+        
+        .hero-info {
+            flex: 1;
+            font-size: 12px;
+        }
+        
+        .hero-info span {
+            margin-right: 8px;
+            color: #999;
+        }
+        
+        /* 连接控制 */
+        .connect-control {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .connect-control input {
+            flex: 1;
+            padding: 12px 15px;
+            background: rgba(47, 54, 60, 0.95);
+            border: 1px solid rgba(74, 158, 255, 0.3);
+            border-radius: 10px;
+            color: #fff;
+            font-size: 14px;
+            transition: border-color 0.2s ease;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+        
+        .connect-control input::placeholder {
+            color: rgba(255, 255, 255, 0.4);
+        }
+        
+        .connect-control input:focus {
+            outline: none;
+            border-color: #4a9eff;
+            background: rgba(47, 54, 60, 0.95);
+            box-shadow: 
+                0 0 0 3px rgba(74, 158, 255, 0.2),
+                0 4px 12px rgba(74, 158, 255, 0.3);
+            transform: translateY(-1px);
+        }
+        
+        .connect-control button {
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #4a9eff 0%, #258DF2 100%);
+            border: none;
+            border-radius: 10px;
+            color: #fff;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 14px;
+            transition: background 0.2s ease, box-shadow 0.2s ease;
+            box-shadow: 0 4px 12px rgba(74, 158, 255, 0.4);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .connect-control button::before {
+            display: none;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+        
+        .connect-control button:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+        
+        .connect-control button:hover {
+            background: linear-gradient(135deg, #6bb6ff 0%, #4a9eff 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(74, 158, 255, 0.5);
+        }
+        
+        .connect-control button:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 8px rgba(74, 158, 255, 0.4);
+        }
+        
+        .disconnect-btn {
+            background: linear-gradient(135deg, #ff4444 0%, #ee3333 100%) !important;
+            box-shadow: 0 4px 12px rgba(255, 68, 68, 0.4) !important;
+        }
+        
+        .disconnect-btn:hover {
+            background: linear-gradient(135deg, #ff6666 0%, #ff4444 100%) !important;
+        }
+        
+        /* 消息提示 */
+        .message {
+            padding: 12px 15px;
+            margin-top: 10px;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: 500;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            animation: slideInDown 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .message::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: inherit;
+        }
+        
+        .message.error {
+            background: linear-gradient(135deg, rgba(255, 68, 68, 0.15) 0%, rgba(255, 68, 68, 0.08) 100%);
+            border: 1px solid rgba(255, 68, 68, 0.4);
+            border-left: 4px solid #ff4444;
+            color: #ff6666;
+            box-shadow: 0 4px 12px rgba(255, 68, 68, 0.2);
+        }
+        
+        .message.success {
+            background: linear-gradient(135deg, rgba(74, 158, 255, 0.15) 0%, rgba(74, 158, 255, 0.08) 100%);
+            border: 1px solid rgba(74, 158, 255, 0.4);
+            border-left: 4px solid #4a9eff;
+            color: #6bb6ff;
+            box-shadow: 0 4px 12px rgba(74, 158, 255, 0.2);
+        }
+        
+        @keyframes slideInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .container {
+                grid-template-columns: 1fr;
+                padding: 10px;
+            }
+
+            .header {
+                flex-direction: column;
+                gap: 10px;
+                text-align: center;
+            }
+
+            .sidebar {
+                gap: 8px;
+            }
+
+            /* 手机端位置调节面板更紧凑 */
+            .map-offset-block {
+                margin-bottom: 6px;
+            }
+
+            .map-offset-block-title {
+                font-size: 11px;
+                margin-bottom: 4px;
+                padding-bottom: 3px;
+            }
+
+            .map-offset-row {
+                margin-bottom: 4px;
+                padding: 3px;
+                gap: 4px;
+            }
+
+            .map-offset-row label {
+                flex: 0 0 18px;
+                min-width: 18px;
+                padding: 2px 4px;
+                font-size: 10px;
+            }
+
+            .map-offset-row input[type="range"] {
+                height: 3px;
+            }
+
+            .map-offset-row input[type="range"]::-webkit-slider-thumb {
+                width: 12px;
+                height: 12px;
+            }
+
+            .map-offset-row input[type="range"]::-moz-range-thumb {
+                width: 12px;
+                height: 12px;
+            }
+
+            .map-offset-val {
+                min-width: 28px;
+                font-size: 10px;
+                padding: 2px 4px;
+            }
+
+            .map-calib-reset {
+                margin-top: 6px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }
+
+            /* 手机端技能显示回地图头像，隐藏侧边栏技能面板 */
+            #heroSkillPanel {
+                display: none !important;
+            }
+            .site-announce-overlay {
+                padding: 12px;
+            }
+            .site-announce-dialog {
+                border-radius: 14px;
+            }
+            .site-announce-title {
+                font-size: 16px;
+                padding: 16px 16px 10px;
+            }
+            .site-announce-body {
+                padding: 14px 16px;
+            }
+            .site-announce-actions {
+                padding: 12px 16px 16px;
+            }
+        }
+
+        /* 英雄技能面板移动端紧凑版 */
+        @media (max-width: 420px) {
+            .hero-skill-hint { font-size: 11px; margin: 10px 0 10px; }
+            .hero-skill-root { gap: 8px; margin-top: 2px; }
+            .hero-skill-block { border-radius: 10px; }
+            .hero-skill-block-head { padding: 5px 7px; gap: 6px; }
+            .hero-skill-mini-avatar { width: 26px; height: 26px; border-width: 2px; }
+            .hero-skill-block-title { font-size: 12px; }
+            .hero-skill-block-meta { font-size: 10px; margin-top: 2px; }
+            .hero-skill-block-rows { padding: 4px 7px 7px; }
+            .hero-skill-item { padding: 4px 6px; border-radius: 10px; }
+            .hero-skill-name { font-size: 11px; }
+            .hero-skill-value { font-size: 11px; }
+        }
+
+        /* 电脑端：用两列布局压缩高度，避免面板过长 */
+        @media (min-width: 900px) {
+            #heroSkillListRoot {
+                grid-template-columns: 1fr;
+                gap: 7px;
+            }
+            #heroSkillContent {
+                padding-left: 10px;
+                padding-right: 10px;
+                padding-bottom: 8px;
+            }
+            .hero-skill-hint {
+                font-size: 10px;
+                margin: 6px 0 8px;
+                line-height: 1.35;
+            }
+            .hero-skill-block {
+                border-radius: 8px;
+                border-width: 1px;
+                display: flex;
+                align-items: stretch;
+            }
+            .hero-skill-block-head {
+                padding: 5px 8px;
+                gap: 7px;
+                border-bottom: none;
+                border-right: 1px solid rgba(148, 163, 184, 0.12);
+                width: 136px;
+                flex-shrink: 0;
+            }
+            .hero-skill-mini-avatar {
+                width: 28px;
+                height: 28px;
+            }
+            .hero-skill-block-title {
+                font-size: 13px;
+                line-height: 1.2;
+                white-space: nowrap;
+            }
+            .hero-skill-block-meta {
+                font-size: 11px;
+                margin-top: 1px;
+            }
+            .hero-skill-block-rows {
+                padding: 4px 4px 4px 2px;
+                gap: 5px;
+                flex: 1;
+                display: flex;
+                flex-direction: row;
+                flex-wrap: nowrap;
+                align-items: center;
+                justify-content: flex-start;
+            }
+            .hero-skill-item {
+                min-height: 34px;
+                padding: 5px 8px;
+                border-radius: 8px;
+                border: 1px solid rgba(74, 158, 255, 0.28);
+                gap: 6px;
+                min-width: 112px;
+                justify-content: flex-start;
+                flex: 0 0 auto;
+            }
+            .hero-skill-left {
+                gap: 6px;
+            }
+            .hero-skill-icon {
+                width: 20px;
+                height: 20px;
+                border-radius: 4px;
+            }
+            .hero-skill-name {
+                font-size: 12px;
+            }
+            .hero-skill-value {
+                font-size: 12px;
+                margin-left: 4px;
+            }
+        }
+        
+        /* WebSocket 连接质量（延迟 / 重连次数） */
+        .radar-ws-hud {
+            font-size: 11px;
+            color: #94a3b8;
+            margin-top: 8px;
+            text-align: center;
+            line-height: 1.5;
+            user-select: none;
+        }
+        .radar-ws-hud-sep { opacity: 0.45; margin: 0 8px; }
+        #wsLatencyText { color: #cbd5e1; }
+        #wsReconnectText { color: #94a3b8; }
+        .radar-scroll-hint {
+            font-size: 11px;
+            color: #94a3b8;
+            margin-top: 6px;
+            text-align: center;
+            line-height: 1.5;
+            user-select: none;
+        }
+        
+        /* Canvas旋转样式 */
+        .rotate0{transform: rotate(0deg);}
+        .rotate180{transform: rotate(180deg);}
+        
+        /* 滚动条 */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #1a1a1a;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        
+        /* 远程公告弹窗：与 .radar / .panel 同系玻璃拟态、主色 #4a9eff */
+        .site-announce-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 99990;
+            background: rgba(10, 14, 39, 0.75);
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            box-sizing: border-box;
+            animation: siteAnnounceOverlayIn 0.35s ease;
+        }
+        @keyframes siteAnnounceOverlayIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .site-announce-dialog {
+            position: relative;
+            background: linear-gradient(135deg, rgba(47, 54, 60, 0.99) 0%, rgba(26, 31, 36, 0.99) 100%);
+            border: 1px solid rgba(74, 158, 255, 0.22);
+            border-radius: 16px;
+            padding: 0;
+            max-width: 480px;
+            width: 100%;
+            max-height: min(82vh, 540px);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            box-shadow:
+                0 8px 32px rgba(0, 0, 0, 0.45),
+                0 0 0 1px rgba(74, 158, 255, 0.12),
+                inset 0 1px 0 rgba(255, 255, 255, 0.06),
+                0 0 80px rgba(74, 158, 255, 0.12);
+            transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.35s ease, border-color 0.35s ease;
+            animation: siteAnnounceDialogIn 0.4s cubic-bezier(0.34, 1.2, 0.64, 1);
+        }
+        @keyframes siteAnnounceDialogIn {
+            from {
+                opacity: 0;
+                transform: translateY(16px) scale(0.96);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+        .site-announce-dialog::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, rgba(74, 158, 255, 0.55), transparent);
+            opacity: 0.9;
+            pointer-events: none;
+            z-index: 2;
+        }
+        .site-announce-dialog::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at center, rgba(74, 158, 255, 0.06) 0%, transparent 65%);
+            pointer-events: none;
+        }
+        .site-announce-title {
+            position: relative;
+            z-index: 1;
+            margin: 0;
+            padding: 20px 22px 12px;
+            font-size: 18px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #4a9eff 0%, #6bb6ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            border-bottom: 2px solid rgba(74, 158, 255, 0.28);
+            letter-spacing: 0.35px;
+        }
+        .site-announce-body {
+            position: relative;
+            z-index: 1;
+            padding: 18px 22px;
+            font-size: 14px;
+            line-height: 1.7;
+            color: #e0e0e0;
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-y: auto;
+            flex: 1;
+            min-height: 0;
+        }
+        .site-announce-actions {
+            position: relative;
+            z-index: 1;
+            padding: 14px 22px 20px;
+            border-top: 1px solid rgba(74, 158, 255, 0.18);
+        }
+        .site-announce-btn {
+            width: 100%;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 14px;
+            color: #fff;
+            background: linear-gradient(135deg, #4a9eff 0%, #258DF2 100%);
+            box-shadow: 0 4px 14px rgba(74, 158, 255, 0.45);
+            transition: background 0.2s ease;
+        }
+        .site-announce-btn:hover {
+            background: linear-gradient(135deg, #6bb6ff 0%, #4a9eff 100%);
+        }
+        
+    </style>
+</head>
+<body>
+    <div id="siteAnnounceOverlay" class="site-announce-overlay" style="display: none;" aria-hidden="true">
+        <div class="site-announce-dialog" role="dialog" aria-modal="true" aria-labelledby="siteAnnounceTitle">
+            <h2 id="siteAnnounceTitle" class="site-announce-title"></h2>
+            <div id="siteAnnounceBody" class="site-announce-body"></div>
+            <div class="site-announce-actions">
+                <button type="button" id="siteAnnounceBtn" class="site-announce-btn">我知道了</button>
+            </div>
+        </div>
+    </div>
+    <div class="bg-decoration"></div>
+    <div class="container">
+        <!-- 头部 -->
+        <header class="header">
+            <h1>游戏雷达</h1>
+            <div class="status">
+                <div class="status-indicator" id="headerStatusIndicator"></div>
+                <span id="currentTime"></span>
+            </div>
+        </header>
+        
+        <!-- 雷达地图 -->
+        <section class="radar">
+            <canvas id="myCanvas" width="340" height="340"></canvas>
+            <div class="radar-ws-hud" id="radarWsHud" title="共享延迟：需 gameData 包末尾带 ###ST:13位毫秒时间戳（由共享端或 Jar 在打包时写入）；无则显示「同步延迟」（网页拉取往返）。重连：断线后自动连上次数（不含首次）">
+                <span id="wsLatencyText">共享延迟: --</span><span class="radar-ws-hud-sep" aria-hidden="true">|</span><span id="wsReconnectText">重连: 0</span>
+            </div>
+            <p class="radar-scroll-hint" role="note">往下滑加群交流反馈</p>
+        </section>
+
+        <!-- 侧边栏切换按钮（固定在右侧顶部，可拖动） -->
+        <button id="toggleSidebarBtn" class="sidebar-toggle-btn" type="button">隐藏侧边栏</button>
+
+        <!-- 悬浮工具栏（全屏按钮、兵线修复按钮） -->
+        <div class="floating-toolbar">
+            <button id="radarFullscreenToggle" class="floating-toolbar-btn fullscreen-btn" type="button">全屏</button>
+            <button id="btnMinionLaneFixFloat" class="floating-toolbar-btn minion-fix-btn" type="button" title="兵线方向与地图不一致时，点击旋转兵线直至与三路推进方向一致">修复兵线</button>
+        </div>
+        
+        <!-- 侧边栏 -->
+        <aside class="sidebar">
+            <!-- 小地图元素位置校准（可折叠，默认折叠） -->
+            <div class="panel panel-collapsible" id="mapCalibrationPanel">
+                <button type="button" class="panel-collapsible-toggle" id="mapCalibToggle" aria-expanded="false" aria-controls="mapCalibContent">
+                    <span class="panel-collapsible-title">🎮 位置调节 - 野怪/头像/兵线</span>
+                    <span class="panel-collapsible-icon" id="mapCalibIcon" aria-hidden="true">▶</span>
+                </button>
+                <div class="panel-collapsible-content" id="mapCalibContent" hidden>
+                    <p class="hero-skill-hint" style="margin: 8px 0 10px;">💡 拖动滑块微调位置，范围±340像素，自动保存</p>
+
+                    <!-- 英雄调节（可折叠，默认折叠） -->
+                    <div class="map-offset-block panel-collapsible" id="heroOffsetBlock">
+                        <button type="button" class="panel-collapsible-toggle" id="heroOffsetToggle" aria-expanded="false" aria-controls="heroOffsetContent" style="padding: 6px 8px; font-size: 12px;">
+                            <span style="font-size: 12px; font-weight: 600;">英雄（头像与血条）</span>
+                            <span id="heroOffsetIcon">▶</span>
+                        </button>
+                        <div id="heroOffsetContent" hidden style="padding: 6px 0 0;">
+                            <div class="map-offset-row">
+                                <label for="offHeroX">X</label>
+                                <input type="range" id="offHeroX" min="-340" max="340" value="0" step="1">
+                                <span class="map-offset-val" id="valHeroX">0</span>
+                            </div>
+                            <div class="map-offset-row">
+                                <label for="offHeroY">Y</label>
+                                <input type="range" id="offHeroY" min="-340" max="340" value="0" step="1">
+                                <span class="map-offset-val" id="valHeroY">0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 兵线调节（可折叠，默认折叠） -->
+                    <div class="map-offset-block panel-collapsible" id="minionOffsetBlock">
+                        <button type="button" class="panel-collapsible-toggle" id="minionOffsetToggle" aria-expanded="false" aria-controls="minionOffsetContent" style="padding: 6px 8px; font-size: 12px;">
+                            <span style="font-size: 12px; font-weight: 600;">兵线</span>
+                            <span id="minionOffsetIcon">▶</span>
+                        </button>
+                        <div id="minionOffsetContent" hidden style="padding: 6px 0 0;">
+                            <div class="map-offset-row">
+                                <label for="offMinionX">X</label>
+                                <input type="range" id="offMinionX" min="-340" max="340" value="0" step="1">
+                                <span class="map-offset-val" id="valMinionX">0</span>
+                            </div>
+                            <div class="map-offset-row">
+                                <label for="offMinionY">Y</label>
+                                <input type="range" id="offMinionY" min="-340" max="340" value="0" step="1">
+                                <span class="map-offset-val" id="valMinionY">0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 野怪调节（可折叠，默认折叠） -->
+                    <div class="map-offset-block panel-collapsible" id="monsterOffsetBlock">
+                        <button type="button" class="panel-collapsible-toggle" id="monsterOffsetToggle" aria-expanded="false" aria-controls="monsterOffsetContent" style="padding: 6px 8px; font-size: 12px;">
+                            <span style="font-size: 12px; font-weight: 600;">野怪</span>
+                            <span id="monsterOffsetIcon">▶</span>
+                        </button>
+                        <div id="monsterOffsetContent" hidden style="padding: 6px 0 0;">
+                            <div class="map-offset-row">
+                                <label for="offMonsterX">X</label>
+                                <input type="range" id="offMonsterX" min="-340" max="340" value="0" step="1">
+                                <span class="map-offset-val" id="valMonsterX">0</span>
+                            </div>
+                            <div class="map-offset-row">
+                                <label for="offMonsterY">Y</label>
+                                <input type="range" id="offMonsterY" min="-340" max="340" value="0" step="1">
+                                <span class="map-offset-val" id="valMonsterY">0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="button" class="map-calib-reset" id="mapCalibReset">恢复默认（全部归零）</button>
+                </div>
+            </div>
+            <!-- 用户信息卡片 -->
+            <div class="panel panel-collapsible" id="userInfoPanel" style="display:none;">
+                <button type="button" class="panel-collapsible-toggle" id="userInfoToggle" aria-expanded="false" aria-controls="userInfoContent">
+                    <span class="panel-collapsible-title">账号信息</span>
+                    <span class="panel-collapsible-icon" id="userInfoIcon" aria-hidden="true">▶</span>
+                </button>
+                <div class="panel-collapsible-content" id="userInfoContent" hidden>
+                    <div style="font-size: 13px; color:#ddd; line-height:1.6; margin-bottom:10px;">
+                        <div>用户：<span id="userInfoName">-</span></div>
+                        <div>卡密：<span id="userInfoCard">-</span></div>
+                        <div>状态：<span id="userInfoStatus">-</span></div>
+                        <div>到期时间：<span id="userInfoExpire">-</span></div>
+                    </div>
+                    <button id="btnUserLogout" style="width:100%;padding:6px 0;border:none;border-radius:6px;background:#ef4444;color:#fff;font-size:13px;cursor:pointer;">
+                        退出登录
+                    </button>
+                </div>
+            </div>
+            <!-- 房间列表 -->
+            <div class="panel panel-collapsible" id="roomListPanel">
+                <button type="button" class="panel-collapsible-toggle" id="roomListToggle" aria-expanded="true" aria-controls="roomListContent">
+                    <span class="panel-collapsible-title">
+                        房间列表
+                        <span id="roomTotalCount" style="font-size:12px;color:#60a5fa;margin-left:6px;">0</span>
+                        <span id="connectionStatus" class="status-indicator disconnected" style="margin-left: 10px;"></span>
+                        <span id="homeText" style="font-size: 12px; color: #999; margin-left: 5px;">未连接</span>
+                    </span>
+                    <span class="panel-collapsible-icon" id="roomListIcon" aria-hidden="true">▼</span>
+                </button>
+                <div class="panel-collapsible-content" id="roomListContent">
+                    <div style="display:flex;gap:8px;margin-bottom:10px;">
+                        <input type="text" id="manualRoomInput" placeholder="输入房间号" style="flex:1;min-width:0;height:34px;border-radius:8px;border:1px solid rgba(74,158,255,.35);background:rgba(15,23,42,.75);color:#fff;padding:0 10px;font-size:13px;">
+                        <button type="button" id="btnManualRoomConnect" style="height:34px;padding:0 12px;border:0;border-radius:8px;background:#3b82f6;color:#fff;font-size:13px;cursor:pointer;">连接</button>
+                    </div>
+                    <div id="roomListContainer">
+                        <div class="list" id="homeList"></div>
+                    </div>
+                    <button class="disconnect-btn" onclick="disconnectRoom();" style="width: 100%; margin-top: 10px;">断开连接</button>
+                </div>
+            </div>
+            
+            <!-- 英雄技能状态（可折叠） -->
+            <div class="panel panel-collapsible" id="heroSkillPanel">
+                <button type="button" class="panel-collapsible-toggle" id="heroSkillToggle" aria-expanded="false" aria-controls="heroSkillContent">
+                    <span class="panel-collapsible-title">英雄技能状态</span>
+                    <span class="panel-collapsible-icon" id="heroSkillIcon" aria-hidden="true">▶</span>
+                </button>
+                <div class="panel-collapsible-content" id="heroSkillContent" hidden>
+                   
+                    <div id="heroSkillListRoot" class="hero-skill-root"></div>
+                </div>
+            </div>
+
+            <!-- Token 分享直连卡片（登录后显示） -->
+            <div class="panel panel-collapsible" id="shareLinkPanel" style="display:none;">
+                <button type="button" class="panel-collapsible-toggle" id="shareLinkToggle" aria-expanded="false" aria-controls="shareLinkContent">
+                    <span class="panel-collapsible-title">Token 分享直连</span>
+                    <span class="panel-collapsible-icon" id="shareLinkIcon" aria-hidden="true">▶</span>
+                </button>
+                <div class="panel-collapsible-content" id="shareLinkContent" hidden>
+                    <div class="share-link-flow">
+                        <div style="margin-bottom:6px;font-weight:600;color:#e2e8f0;">功能流程</div>
+                        <ol>
+                            <li>会员在个人中心点击“生成分享链接”</li>
+                            <li>系统生成带 Token 的唯一链接（<strong>24 小时内有效</strong>，过期自动失效，需重新生成）</li>
+                            <li>朋友打开链接后可直接用地图</li>
+                        </ol>
+                    </div>
+                    <div class="share-link-controls">
+                        <button id="btnGenerateShareLink" class="share-link-btn" type="button">生成分享链接</button>
+                        <button id="btnCopyShareLink" class="share-link-btn copy" type="button">复制链接</button>
+                    </div>
+                    <input id="shareLinkOutput" class="share-link-output" type="text" readonly placeholder="点击“生成分享链接”后显示">
+                </div>
+            </div>
+
+            <!-- 加Q群卡片（登录后显示） -->
+            <div class="panel panel-collapsible" id="qqGroupPanel" style="display:none;">
+                <button type="button" class="panel-collapsible-toggle" id="qqGroupToggle" aria-expanded="false" aria-controls="qqGroupContent">
+                    <span class="panel-collapsible-title">加入Q群获取支持</span>
+                    <span class="panel-collapsible-icon" id="qqGroupIcon" aria-hidden="true">▶</span>
+                </button>
+                <div class="panel-collapsible-content" id="qqGroupContent" hidden>
+                    <div style="font-size:12px;color:#94a3b8;line-height:1.6;margin-bottom:10px;">
+                        点击下方按钮跳转加入QQ群，获取技术支持与更新公告。
+                    </div>
+                    <button
+                        id="btnJoinQGroup"
+                        type="button"
+                        class="share-link-btn"
+                        style="width:100%;"
+                        data-url="https://qm.qq.com/q/bhZLKSPN6w"
+                        data-group-id="1072788749"
+                    >跳转加Q群</button>
+                    <div class="share-link-tip" style="margin-top:10px;">
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 消息提示 -->
+            <div id="errorMessage" class="message error" style="display:none;"></div>
+            <div id="successMessage" class="message success" style="display:none;"></div>
+        </aside>
+    </div>
+    
+    <script type="text/javascript">
+        // 更新时间
+        function updateTime() {
+            try {
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString('zh-CN');
+                const dateStr = now.toLocaleDateString('zh-CN');
+                var el = document.getElementById('currentTime');
+                if (el) el.textContent = dateStr + ' ' + timeStr;
+            } catch (e) {}
+        }
+
+        // 分享token 模式（手机共享/无登录情况下）
+        // 该模式下禁用非必要的 API 调用，避免触发后端额外开销或状态写入导致进程被杀/异常退出。
+        var __shareTokenMode = false;
+        (function initShareTokenMode() {
+            try {
+                var u = new URL(window.location.href);
+                var t = u.searchParams.get('token') || '';
+                __shareTokenMode = String(t).trim() !== '';
+            } catch (e) {
+                __shareTokenMode = false;
+            }
+        })();
+        
+        // 初始化应用（去除授权，直接连接服务器）
+        function initApp() {
+            setInterval(updateTime, 1000);
+            updateTime();
+
+            // 分享token模式下跳过用户信息与相关 UI（避免无登录会话触发多余请求）
+            if (!__shareTokenMode) {
+                // 加载当前登录用户信息（到期时间等）
+                loadUserProfile();
+            }
+
+            // 直接尝试连接服务器
+            initWebSocket();
+        }
+
+        /** 后台「主站公告」远程配置；同版本点过「我知道了」则不再弹出，更新后 updated_at 变化会再弹 */
+        function tryShowSiteAnnouncement() {
+            try {
+                fetch('api/index.php?module=site_announcement&_=' + Date.now(), {
+                    cache: 'no-store',
+                    credentials: 'include'
+                }).then(function(r) { return r.json(); })
+                .then(function(res) {
+                    if (!res || res.code !== 0 || !res.data) return;
+                    var d = res.data;
+                    if (!d.enabled) return;
+                    var t = (d.title != null ? String(d.title) : '').trim();
+                    var b = (d.body != null ? String(d.body) : '').trim();
+                    if (!t && !b) return;
+                    var ver = d.updated_at ? String(d.updated_at) : '0';
+                    var ackKey = 'site_announce_ack_v1';
+                    try {
+                        if (localStorage.getItem(ackKey) === ver) return;
+                    } catch (eLs) {}
+                    var ov = document.getElementById('siteAnnounceOverlay');
+                    var ht = document.getElementById('siteAnnounceTitle');
+                    var bd = document.getElementById('siteAnnounceBody');
+                    var btn = document.getElementById('siteAnnounceBtn');
+                    if (!ov || !ht || !bd || !btn) return;
+                    ht.textContent = t || '公告';
+                    bd.textContent = b;
+                    ov.style.display = 'flex';
+                    ov.setAttribute('aria-hidden', 'false');
+                    btn.onclick = function() {
+                        ov.style.display = 'none';
+                        ov.setAttribute('aria-hidden', 'true');
+                        try { localStorage.setItem(ackKey, ver); } catch (e2) {}
+                    };
+                }).catch(function() {});
+            } catch (e) {}
+        }
+
+        // 加载当前登录用户信息（到期时间）
+        function loadUserProfile() {
+            fetch('api/index.php?module=user_profile&_=' + Date.now(), {
+                cache: 'no-store',
+                credentials: 'include'
+            }).then(function(r) { return r.json(); })
+            .then(function(res) {
+                if (!res || res.code !== 0 || !res.data) return;
+                var d = res.data;
+                var panel = document.getElementById('userInfoPanel');
+                if (!panel) return;
+                panel.style.display = 'block';
+                bindShareLinkCard(d);
+                document.getElementById('userInfoName').textContent = d.username || '-';
+                document.getElementById('userInfoCard').textContent = d.card_code || '-';
+                document.getElementById('userInfoStatus').textContent = d.card_status || '-';
+                var expEl = document.getElementById('userInfoExpire');
+                if (d.expires_at) {
+                    expEl.textContent = d.expires_at;
+                    expEl.style.color = (d.card_status === '已过期') ? '#ff6b6b' : '#4ade80';
+                } else {
+                    expEl.textContent = d.card_code ? '永久' : '-';
+                    expEl.style.color = '#ddd';
+                }
+                // 绑定退出登录按钮
+                var btnLogout = document.getElementById('btnUserLogout');
+                if (btnLogout && !btnLogout._bound) {
+                    btnLogout._bound = true;
+                    btnLogout.onclick = function() {
+                        if (!confirm('确定要退出当前账号吗？')) return;
+                        fetch('api/index.php?module=user_logout', {
+                            method: 'POST',
+                            credentials: 'include'
+                        }).then(function() {
+                            // 无论返回什么，都回到登录页
+                            window.location.href = 'login.html';
+                        }).catch(function() {
+                            window.location.href = 'login.html';
+                        });
+                    };
+                }
+            }).catch(function(e) {
+                console.warn('加载用户信息失败:', e);
+            });
+        }
+
+        function bindShareLinkCard(profile) {
+            var panel = document.getElementById('shareLinkPanel');
+            if (!panel) return;
+            panel.style.display = 'block';
+
+            // 展示“加入Q群”卡片（无论是否拿到用户信息，也尽量让按钮可用）
+            initQQGroupPanel();
+
+            var output = document.getElementById('shareLinkOutput');
+            var btnGen = document.getElementById('btnGenerateShareLink');
+            var btnCopy = document.getElementById('btnCopyShareLink');
+            if (!output || !btnGen || !btnCopy) return;
+
+            if (!btnGen._bound) {
+                btnGen._bound = true;
+                btnGen.onclick = function() {
+                    if (btnGen.disabled) return;
+                    btnGen.disabled = true;
+                    var oldText = btnGen.textContent;
+                    btnGen.textContent = '生成中...';
+                    fetch('api/index.php?module=share_token_generate', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({})
+                    }).then(function(r) {
+                        return r.text().then(function(text) {
+                            var data = null;
+                            try { data = JSON.parse(text); } catch (e) {}
+                            return { ok: r.ok, status: r.status, text: text, data: data };
+                        });
+                    }).then(function(ret) {
+                        var res = ret.data;
+                        if (ret.ok && res && res.code === 0 && res.data && (res.data.url || res.data.token)) {
+                            var finalUrl = '';
+                            if (res.data.url) {
+                                finalUrl = res.data.url;
+                            } else {
+                                var u = new URL(window.location.href);
+                                u.hash = '';
+                                u.searchParams.set('token', String(res.data.token));
+                                finalUrl = u.toString();
+                            }
+                            output.value = finalUrl;
+                            var expHint = (res.data && res.data.expires_at) ? ('，有效期至 ' + res.data.expires_at) : '';
+                            showSuccess('分享链接已生成' + expHint, 3200);
+                        } else {
+                            var raw = (ret.text || '').trim();
+                            var msg = (res && res.msg) ? res.msg : ('生成失败（HTTP ' + ret.status + '）');
+                            if (!res && raw) {
+                                msg += '：' + raw.slice(0, 120);
+                            } else if (res && typeof res.code !== 'undefined') {
+                                msg += '（code=' + res.code + '）';
+                            }
+                            showError(msg, 3200);
+                        }
+                        btnGen.disabled = false;
+                        btnGen.textContent = oldText;
+                    }).catch(function() {
+                        showError('生成失败，请稍后重试', 2200);
+                        btnGen.disabled = false;
+                        btnGen.textContent = oldText;
+                    });
+                };
+            }
+
+            if (!btnCopy._bound) {
+                btnCopy._bound = true;
+                btnCopy.onclick = function() {
+                    if (!output.value) {
+                        showError('请先生成分享链接', 1800);
+                        return;
+                    }
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(output.value).then(function() {
+                            showSuccess('分享链接已复制', 1800);
+                        }).catch(function() {
+                            output.select();
+                            document.execCommand('copy');
+                            showSuccess('分享链接已复制', 1800);
+                        });
+                    } else {
+                        output.select();
+                        document.execCommand('copy');
+                        showSuccess('分享链接已复制', 1800);
+                    }
+                };
+            }
+        }
+
+        function initQQGroupPanel() {
+            var qqPanel = document.getElementById('qqGroupPanel');
+            if (qqPanel) qqPanel.style.display = 'block';
+            var btnJoin = document.getElementById('btnJoinQGroup');
+            if (btnJoin && !btnJoin._bound) {
+                btnJoin._bound = true;
+                btnJoin.onclick = function() {
+                    var url = btnJoin.getAttribute('data-url') || '';
+                    var groupId = btnJoin.getAttribute('data-group-id') || '';
+                    if (!url || url === '#') {
+                        if (!groupId) {
+                            showError('请先在代码中配置QQ群：修改按钮 data-group-id 为你的群号', 4000);
+                            return;
+                        }
+                        // 邀请链接缺失时：打开QQ群查找页 + 尝试复制群号
+                        try {
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(groupId);
+                            }
+                        } catch (e) {}
+                        showSuccess('已复制群号并打开QQ群查找页（' + groupId + '）', 2500);
+                        var findUrl = 'https://id.qq.com/groupv2/?word=' + encodeURIComponent(groupId);
+                        window.open(findUrl, '_blank', 'noopener');
+                        return;
+                    }
+                    window.open(url, '_blank', 'noopener');
+                };
+            }
+        }
+        
+        function setMainEntryBlockedOverlay(msg) {
+            try {
+                if (window.__mainEntry503Shown) return;
+                window.__mainEntry503Shown = true;
+
+                var existing = document.getElementById('mainEntry503Overlay');
+                if (existing) {
+                    existing.style.display = 'flex';
+                    return;
+                }
+
+                var overlay = document.createElement('div');
+                overlay.id = 'mainEntry503Overlay';
+                overlay.style.position = 'fixed';
+                overlay.style.top = '0';
+                overlay.style.left = '0';
+                overlay.style.width = '100%';
+                overlay.style.height = '100%';
+                overlay.style.background = 'rgba(15, 23, 42, 0.85)';
+                overlay.style.zIndex = '999999';
+                overlay.style.display = 'flex';
+                overlay.style.alignItems = 'center';
+                overlay.style.justifyContent = 'center';
+                overlay.style.padding = '20px';
+                overlay.style.textAlign = 'center';
+                overlay.style.fontFamily = 'Microsoft YaHei, Arial, sans-serif';
+                overlay.innerHTML = ''
+                    + '<div style="max-width:720px; width:100%; background:rgba(8,19,50,0.7);'
+                    + 'border:1px solid rgba(56,189,248,0.25); border-radius:16px; padding:22px 18px; color:#e5e7eb;">'
+                    + '<h2 style="margin:0 0 10px; color:#38bdf8;">站点暂不可用</h2>'
+                    + '<p style="margin:0; color:rgba(229,231,235,0.85); line-height:1.8; font-size:14px;">'
+                    + (msg ? msg : '请稍后再试，维护结束后将自动恢复服务。')
+                    + '</p>'
+                    + '</div>';
+                document.body.appendChild(overlay);
+                document.body.style.overflow = 'hidden';
+            } catch (e) {}
+        }
+
+        function checkMainEntry503Frontend() {
+            return Promise.resolve(false);
+        }
+
+        // 页面加载时先校验访问权限（卡密未过期且未删除），未通过则跳转登录页。
+        window.addEventListener('DOMContentLoaded', function() {
+            var currentUrl = new URL(window.location.href);
+            var shareToken = currentUrl.searchParams.get('token') || '';
+            var checkAccessUrl = 'api/index.php?module=check_access&_=' + Date.now();
+            if (shareToken) {
+                checkAccessUrl += '&token=' + encodeURIComponent(shareToken);
+            }
+            fetch(checkAccessUrl, { cache: 'no-store', credentials: 'include' })
+                .then(function(r) {
+                    if (r && r.status === 503) {
+                        setMainEntryBlockedOverlay('请稍后再试。');
+                        return null;
+                    }
+                    return r.json();
+                })
+                .then(function(res) {
+                    if (res === null) return;
+                    if (res && res.allowed === true) {
+                        // 分享 token/未登录情况下也展示“加入Q群”卡片
+                        initQQGroupPanel();
+                        initApp();
+                        // 分享token模式下跳过公告拉取，避免额外并发请求影响共享传输稳定性
+                        if (!__shareTokenMode) {
+                            setTimeout(tryShowSiteAnnouncement, 800);
+                        }
+                    } else {
+                        window.location.href = 'login.html';
+                    }
+                })
+                .catch(function() {
+                    window.location.href = 'login.html';
+                });
+        });
+        
+        // 原有的业务逻辑代码
+        document.onkeydown = function (event) {    
+            event = event || window.event;
+            if (event && (event.keyCode == 123 || event.key === 'F12')) {    
+                event.preventDefault();
+                event.stopPropagation();
+                return false;
+            }    
+        }
+        
+        /** 房间上报后端限流：避免与 getGameData 同频发 fetch；间隔过小会加重服务端与网络负载 */
+        var lastRoomReportTime = 0;
+        var ROOM_REPORT_INTERVAL_MS = 15000;
+        /**
+         * 与 index2 对齐：拉取帧使用「会话级」固定时间戳，避免每帧变更 web…[==]room 整串内容导致
+         * 共享端/中转服务对每条请求做完整解析与排队（易引发手机共享端 OOM/进程被杀）。
+         * 进入房间时可再刷新一次（见 getGameData）。
+         */
+        var webPullTimestamp = Date.now();
+        var resumeReconnectTimer = null;
+        // 服务器IP：自动根据当前访问地址的主机生成（本机 / 部署机器的 IP）
+        // 默认使用当前 hostname + 端口 8888，例如 http://192.168.1.10 打开页面时，连接 ws://192.168.1.10:8888/ws
+        var ip = (function() {
+            var host = window.location.hostname;
+            var port = '8888'; // 如需修改端口，在此修改即可
+            if (!host || host === '') {
+                host = '127.0.0.1';
+            }
+            return host + ':' + port;
+        })();
+        var socket;
+        var defaultGameServer = ip;
+        var activeGameServer = ip;
+        var gameServers = [];
+        var roomListSockets = {};
+        var roomListTimers = {};
+        var roomListByServer = {};
+        var roomSocketStartTimers = [];
+        var roomSocketQueue = [];
+        var roomSocketQueueTimer = null;
+        var roomSocketActiveCount = 0;
+        var roomSocketMaxActive = 1;
+        var roomSocketFailedUntil = {};
+        var pendingRoomServer = '';
+        var pendingRoomId = '';
+        var homeId="";
+        /** 游戏数据 WS 拉取间隔（ms）。过高频率易与回包异步叠加重试，排队抖动反而让头像发涩；约 50 次/秒为折中 */
+        var gameDataTime = 1000 / 60;
+        var showThisData=0;
+        var mapImageRotate=0;
+        /** 最近一次完整游戏数据字符串，用于「修复兵线」后立即重绘 */
+        var lastProcessedGameData = null;
+        /** lastProcessedGameData 对应的房间号，用于防止切房间后旧帧回刷 */
+        var lastProcessedRoomId = null;
+        /** 兵线绕地图中心逆时针旋转的步数（每步90°，0–3），持久化到 localStorage */
+        var minionLaneRotationSteps = 0;
+        /** 自动兵线方向校准：首次拿到足够兵线样本后自动选择旋转角度 */
+        var minionLaneAutoEnabled = true;
+        var minionLaneAutoLocked = false;
+        (function loadMinionLaneRotation() {
+            try {
+                var s = localStorage.getItem('minionLaneRotationSteps');
+                if (s !== null && s !== '') {
+                    var n = parseInt(s, 10);
+                    if (!isNaN(n)) minionLaneRotationSteps = ((n % 4) + 4) % 4;
+                }
+                var autoOff = localStorage.getItem('minionLaneAutoOff');
+                if (autoOff === '1') minionLaneAutoEnabled = false;
+            } catch (e) { /* ignore */ }
+        })();
+        /** 小地图各图层坐标偏移（游戏坐标系，用于与底图对齐） */
+        var mapOffsetHeroX = 0, mapOffsetHeroY = 0;
+        var mapOffsetMinionX = 0, mapOffsetMinionY = 0;
+        var mapOffsetMonsterX = 0, mapOffsetMonsterY = 0;
+        (function loadMapOffsetsFromStorage() {
+            function clampOff(v) {
+                if (isNaN(v)) return 0;
+                return Math.max(-340, Math.min(340, v));
+            }
+            function r(key) {
+                try {
+                    var s = localStorage.getItem(key);
+                    if (s === null || s === '') return 0;
+                    return clampOff(parseInt(s, 10));
+                } catch (e) { return 0; }
+            }
+            mapOffsetHeroX = r('mapOffsetHeroX');
+            mapOffsetHeroY = r('mapOffsetHeroY');
+            mapOffsetMinionX = r('mapOffsetMinionX');
+            mapOffsetMinionY = r('mapOffsetMinionY');
+            mapOffsetMonsterX = r('mapOffsetMonsterX');
+            mapOffsetMonsterY = r('mapOffsetMonsterY');
+        })();
+        var intervalIds = [];
+        var animationFrameId = null;
+        /** onopen 里赋值为当前 gameLoop，供切回标签页时恢复 rAF（避免画面卡死） */
+        var radarGameLoopRef = null;
+        var lastDrawTime = 0;
+        var drawThrottle = 0; // 移除节流，使用requestAnimationFrame的天然帧率（通常60fps，高刷新率显示器可达120fps+）
+        var pendingGameData = null; // 待处理的游戏数据
+        var isDrawing = false; // 防止重复绘制
+        
+        // 房间列表更新优化
+        var lastRoomListData = null; // 上次的房间列表数据，用于比较
+        var lastRoomListUpdate = 0; // 上次更新时间
+        var roomListUpdateThrottle = 500; // 房间列表更新节流（500ms，减少跳动）
+        
+        // 敌方技能信息更新节流
+        var lastEnemySkillUpdate = 0;
+        // IP -> 用户名缓存，避免重复请求
+        var ipUsernameCache = {};
+        var enemySkillUpdateThrottle = 200; // 限制技能信息更新频率为5fps（减少DOM操作，提高性能）
+        var lastEnemySkillData = null; // 上次的技能数据，用于比较
+        // 英雄技能面板状态缓存：用于“英雄死亡后不立即消失，置灰直到复活”
+        var heroSkillPanelState = Object.create(null);
+        var heroSkillPanelOrder = [];
+
+        function resetHeroSkillPanelCache() {
+            heroSkillPanelState = Object.create(null);
+            heroSkillPanelOrder = [];
+        }
+
+        function resetRoomVisualState() {
+            resetHeroSkillPanelCache();
+            lastProcessedGameData = null;
+            lastProcessedRoomId = null;
+            pendingGameData = null;
+            英雄信息 = [];
+            try { clearCanvas(); } catch (e) {}
+            try {
+                var root = document.getElementById('heroSkillListRoot');
+                if (root) root.innerHTML = '<div class="hero-skill-empty">暂无英雄数据</div>';
+            } catch (e2) {}
+        }
+
+        function mergeHeroSkillPanelData(currentHeroes) {
+            var now = Date.now();
+            var seen = Object.create(null);
+            var i;
+
+            if (!Array.isArray(currentHeroes)) currentHeroes = [];
+            for (i = 0; i < currentHeroes.length; i++) {
+                var h = currentHeroes[i];
+                if (!h || h.heroId === undefined || h.heroId === null) continue;
+                var hid = String(h.heroId);
+                seen[hid] = true;
+                var prev = heroSkillPanelState[hid] || {};
+                var deadCdNum = Number(h.deathCD);
+                var hasDeadCd = !isNaN(deadCdNum) && deadCdNum > 0;
+                heroSkillPanelState[hid] = {
+                    heroId: hid,
+                    ultCD: h.ultCD,
+                    summoner1CD: h.summoner1CD,
+                    summonerSkillId: h.summonerSkillId,
+                    zy: h.zy,
+                    level: h.level,
+                    isDead: !!h.isDead || hasDeadCd,
+                    deathCD: hasDeadCd ? deadCdNum : (h.isDead ? prev.deathCD : undefined),
+                    lastSeenAt: now
+                };
+                if (heroSkillPanelOrder.indexOf(hid) === -1) heroSkillPanelOrder.push(hid);
+            }
+
+            for (i = 0; i < heroSkillPanelOrder.length; i++) {
+                var id0 = heroSkillPanelOrder[i];
+                var st0 = heroSkillPanelState[id0];
+                if (!st0) continue;
+                if (!seen[id0] && now - (st0.lastSeenAt || 0) > 800) {
+                    // 未上报该英雄时保持灰色占位，不猜测倒计时
+                    st0.isDead = true;
+                }
+            }
+
+            // 固定行序：整局沿用「首次见到英雄」时的顺序，复活/阵亡只更新状态不整行搬家
+            var out = [];
+            for (i = 0; i < heroSkillPanelOrder.length; i++) {
+                var id2 = heroSkillPanelOrder[i];
+                var st2 = heroSkillPanelState[id2];
+                if (!st2) continue;
+                out.push(st2);
+                if (out.length >= 5) break;
+            }
+            return out;
+        }
+        
+        /**
+         * 英雄地图坐标：速度自适应 EMA（Industry 里常叫 velocity-aware smoothing）。
+         * 单帧位移大 → 系数靠近 1，贴近真值（走跑时接近「零额外延迟」）；
+         * 位移极小 → 系数小，吃掉读数抖动（站撸/微颤）。
+         * 严格数学意义上「零延迟且去掉所有噪声」需要未来帧或已知运动模型，Web 雷达做不到；此为无预测下的较优折中。
+         */
+        var __heroPosSmooth = Object.create(null);
+        var HERO_POS_TELEPORT_SQ = 280 * 280;
+
+        function heroPosAdaptiveAlpha(stepSq) {
+            if (stepSq <= 0) return 0.32;
+            var step = Math.sqrt(stepSq);
+            var narrow = false;
+            try {
+                narrow = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+            } catch (e) {}
+            if (!narrow) narrow = window.innerWidth <= 768;
+
+            var aLo = narrow ? 0.4 : 0.32;
+            var aHi = narrow ? 0.91 : 0.94;
+            var s0 = 1.1;
+            var s1 = 7;
+            if (step <= s0) {
+                return aLo;
+            }
+            if (step >= s1) {
+                return aHi;
+            }
+            var t = (step - s0) / (s1 - s0);
+            t = t * t * (3 - 2 * t);
+            return aLo + (aHi - aLo) * t;
+        }
+
+        function smoothHeroMapPos(heroId, mapX, mapY) {
+            var key = String(heroId);
+            var px = Number(mapX);
+            var py = Number(mapY);
+            if (isNaN(px) || isNaN(py)) return { x: mapX, y: mapY };
+            var prev = __heroPosSmooth[key];
+            if (!prev) {
+                __heroPosSmooth[key] = { x: px, y: py };
+                return { x: px, y: py };
+            }
+            var dx = px - prev.x;
+            var dy = py - prev.y;
+            var stepSq = dx * dx + dy * dy;
+            if (stepSq > HERO_POS_TELEPORT_SQ) {
+                __heroPosSmooth[key] = { x: px, y: py };
+                return { x: px, y: py };
+            }
+            var a = heroPosAdaptiveAlpha(stepSq);
+            if (a > 0.96) a = 0.96;
+            var nx = prev.x + dx * a;
+            var ny = prev.y + dy * a;
+            __heroPosSmooth[key] = { x: nx, y: ny };
+            return { x: nx, y: ny };
+        }
+        
+        var connectionState = 'disconnected';
+        var reconnectAttempts = 0;
+        var maxReconnectAttempts = Infinity;
+        /** WS 质量：首次连上不计入「重连」；之后每次 onopen 成功 +1 */
+        var wsHasEverConnected = false;
+        var wsLifetimeReconnects = 0;
+        /** 最近一次 getGameData 发送时刻；无 ###ST 时间戳时用往返估算「同步延迟」 */
+        var wsLastSendAt = 0;
+        /** 最近一次请求/收到 gameData 的时刻（仅用于延迟 HUD，不再主动断线自愈以免拖垮共享端） */
+        var wsLastGameDataRequestAt = 0;
+        var wsLastGameDataReceiveAt = 0;
+        var wsLatencyEma = null;
+        /** gameData 末尾 ###ST:毫秒（共享端或 Jar 写入帧时刻）→ 到本机收到时的滞后，近似「共享→服→网页」数据延迟 */
+        var wsSharerLatencyEma = null;
+
+        function stripGameDataTimelineSuffix(s) {
+            if (typeof s !== 'string') return s;
+            return s.replace(/###ST:\d{13}\s*$/, '');
+        }
+        function extractGameDataStampMs(s) {
+            if (typeof s !== 'string') return null;
+            var m = s.match(/###ST:(\d{13})\s*$/);
+            return m ? parseInt(m[1], 10) : null;
+        }
+
+        function updateWsQualityHud() {
+            var el = document.getElementById('wsLatencyText');
+            var r = document.getElementById('wsReconnectText');
+            if (r) r.textContent = '重连: ' + wsLifetimeReconnects;
+            if (el) {
+                if (typeof connectionState === 'undefined' || connectionState !== 'connected') {
+                    el.textContent = '共享延迟: --';
+                } else if (wsSharerLatencyEma !== null) {
+                    el.textContent = '共享延迟: ' + Math.round(wsSharerLatencyEma) + 'ms';
+                } else if (wsLatencyEma !== null) {
+                    el.textContent = '同步延迟: ' + Math.round(wsLatencyEma) + 'ms';
+                } else {
+                    el.textContent = '共享延迟: --';
+                }
+            }
+        }
+        var reconnectTimer = null;
+        var connectionTimeout = null; // WebSocket连接超时定时器
+        var roomListPasswordEncrypted = (function() {
+            // 使用更复杂的多层加密
+            var base64Part1 = 'MTE3Mj';
+            var base64Part2 = 'U0Mw==';
+            return base64Part1 + base64Part2;
+        })();
+        
+        function decryptPassword(encrypted) {
+            try {
+                // 实现更复杂的解密逻辑
+                var parts = [encrypted.substring(0, 6), encrypted.substring(6)];
+                var reconstructed = parts[0] + parts[1];
+                return atob(reconstructed);
+            } catch(e) {
+                console.error('密码解密失败:', e);
+                // 失败时返回默认值（使用字符编码方式，避免明文）
+                // 字符编码: '123456' 的ASCII码
+                return String.fromCharCode(49,50,51,52,53,54);
+            }
+        }
+        
+        // 获取解密后的房间列表密码
+        var roomListPassword = decryptPassword(roomListPasswordEncrypted);
+        
+        var isPasswordVerified = false; // 是否已通过密码验证
+        
+        var cache = {
+            roomList: [],
+            heroInfo: [],
+            lastUpdate: null,
+            cacheExpiry: 30000
+        };
+        
+        // 更新头部「在线房间 / 在线人数」统计（已取消显示，保留空函数避免报错）
+        function updateHeaderStats(roomList) {
+            // no-op
+        }
+        
+        // 从后端获取在线人数
+        // 需要后端提供接口：api/index.php?module=online_ip_count
+        // 建议返回结构：
+        // { code:0, data:{ total: 10 } } 或
+        // { code:0, data:{ ip_count: 10 } } 或
+        // { code:0, data:{ ws8888: 5 } }（已在后端去重）
+        function fetchOnlineUserCount() {
+            try {
+                fetch('api/index.php?module=online_ip_count&_=' + Date.now(), {
+                    cache: 'no-store',
+                    credentials: 'include'
+                }).then(function(r){ 
+                    return r.json(); 
+                }).then(function(res){
+                    if (!res || res.code !== 0 || !res.data) return;
+                    var d = res.data || {};
+                    var total = 0;
+                    
+                    if (typeof d.total === 'number') {
+                        total = d.total;
+                    } else if (typeof d.total_ip === 'number') {
+                        total = d.total_ip;
+                    } else if (typeof d.ip_count === 'number') {
+                        total = d.ip_count;
+                    } else {
+                        if (typeof d.ws8888 === 'number') {
+                            total += d.ws8888;
+                        }
+                        if (typeof d['8888'] === 'number') {
+                            total += d['8888'];
+                        }
+                    }
+                    
+                    if (total < 0 || isNaN(total)) {
+                        return;
+                    }
+                    
+                    var userCountEl = document.getElementById('onlineUserCount');
+                    if (userCountEl) {
+                        userCountEl.textContent = total;
+                    }
+                }).catch(function(e){
+                    console.warn('获取在线人数失败:', e);
+                });
+            } catch(e) {
+                console.warn('获取在线人数异常:', e);
+            }
+        }
+        function getWebSocketProtocol() {
+            var protocol = window.location.protocol;
+            if (protocol === 'https:') {
+                return 'wss://';
+            } else {
+                return 'ws://';
+            }
+        }
+        
+        function updateConnectionStatus(status, message) {
+            connectionState = status;
+            var statusElement = document.getElementById('connectionStatus');
+            var homeTextElement = document.getElementById('homeText');
+            var headerIndicator = document.getElementById('headerStatusIndicator');
+            
+            if(statusElement) {
+                statusElement.className = 'status-indicator ' + status;
+            }
+            
+            if(headerIndicator) {
+                if (status === 'connected') {
+                    headerIndicator.classList.remove('disconnected');
+                } else {
+                    headerIndicator.classList.add('disconnected');
+                }
+            }
+            
+            if(homeTextElement) {
+                // 只有在未连接房间时才更新状态文本，避免覆盖房间号显示
+                if(homeId === '' || status === 'disconnected' || status === 'error') {
+                    var statusText = {
+                        'connected': '已连接',
+                        'connecting': '连接中...',
+                        'disconnected': '未连接',
+                        'error': '连接错误'
+                    };
+                    homeTextElement.textContent = statusText[status] + (message ? ': ' + message : '');
+                } else if(status === 'connected' && homeId !== '') {
+                    // 如果已连接且有房间号，显示房间号
+                    homeTextElement.textContent = '已连接: ' + homeId;
+                }
+            }
+            // 同步到服务器信息弹窗里的状态
+            try {
+                var stEl = document.getElementById('serverConnStateText');
+                if (stEl) {
+                    var map = { connected: '已连接', connecting: '连接中...', disconnected: '未连接', error: '连接错误' };
+                    stEl.textContent = (map[status] || status) + (message ? ('：' + message) : '');
+                }
+            } catch (e) {}
+            try { updateWsQualityHud(); } catch (e2) {}
+        }
+
+        function showError(message, duration) {
+            var errorElement = document.getElementById('errorMessage');
+            if(errorElement) {
+                errorElement.textContent = '[ERROR] ' + message;
+                errorElement.style.display = 'block';
+                setTimeout(function() {
+                    errorElement.style.display = 'none';
+                }, duration || 5000);
+            }
+            console.error(message);
+        }
+        
+        function showSuccess(message, duration) {
+            var successElement = document.getElementById('successMessage');
+            if(successElement) {
+                successElement.textContent = '[SUCCESS] ' + message;
+                successElement.style.display = 'block';
+                setTimeout(function() {
+                    successElement.style.display = 'none';
+                }, duration || 3000);
+            }
+        }
+        
+        function saveToCache(key, data) {
+            try {
+                cache[key] = data;
+                cache.lastUpdate = new Date().getTime();
+                localStorage.setItem('gameCache_' + key, JSON.stringify({
+                    data: data,
+                    timestamp: cache.lastUpdate
+                }));
+            } catch(e) {
+                console.warn('保存缓存失败:', e);
+            }
+        }
+        
+        function getFromCache(key) {
+            try {
+                var cached = localStorage.getItem('gameCache_' + key);
+                if(cached) {
+                    var parsed = JSON.parse(cached);
+                    var now = new Date().getTime();
+                    if(now - parsed.timestamp < cache.cacheExpiry) {
+                        return parsed.data;
+                    }
+                }
+            } catch(e) {
+                console.warn('读取缓存失败:', e);
+            }
+            return null;
+        }
+        
+        const homeIdInput = document.getElementById("homeIdInput");
+        const homeText = document.getElementById("homeText");
+        const homeList = document.getElementById("homeList");
+        const canvas_game = document.getElementById("myCanvas");
+        const context = canvas_game.getContext("2d");
+        /** 窄屏用低质量缩放减轻 GPU 压力，不增加任何网络请求 */
+        function applyCanvasImageSmoothing() {
+            try {
+                var narrow = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+                context.imageSmoothingEnabled = true;
+                if (typeof context.imageSmoothingQuality === 'string') {
+                    context.imageSmoothingQuality = narrow ? 'low' : 'medium';
+                }
+            } catch (e) {}
+        }
+        applyCanvasImageSmoothing();
+        const radarContainer = document.querySelector('.radar');
+        const radarFullscreenToggle = document.getElementById('radarFullscreenToggle');
+        const btnMinionLaneFix = document.getElementById('btnMinionLaneFix');
+        const btnMinionLaneFixFloat = document.getElementById('btnMinionLaneFixFloat');
+        let isRadarFullscreen = false;
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState !== 'visible') return;
+            isDrawing = false;
+            try {
+                if (lastProcessedGameData && canvas_game && context) {
+                    processGameData(lastProcessedGameData);
+                }
+            } catch (e) {}
+            try {
+                if (socket && socket.readyState === WebSocket.OPEN && radarGameLoopRef && animationFrameId === null) {
+                    animationFrameId = requestAnimationFrame(radarGameLoopRef);
+                }
+            } catch (e2) {}
+            try {
+                if ((!socket || socket.readyState === WebSocket.CLOSED) && ip && String(ip).trim() !== '') {
+                    if (resumeReconnectTimer) clearTimeout(resumeReconnectTimer);
+                    resumeReconnectTimer = setTimeout(function() {
+                        resumeReconnectTimer = null;
+                        if ((!socket || socket.readyState === WebSocket.CLOSED) && typeof initWebSocket === 'function') {
+                            initWebSocket();
+                        }
+                    }, 400);
+                }
+            } catch (e2) {}
+        });
+        window.addEventListener('pageshow', function(ev) {
+            if (!ev.persisted) return;
+            isDrawing = false;
+            try {
+                if (socket && socket.readyState === WebSocket.OPEN && radarGameLoopRef && animationFrameId === null) {
+                    animationFrameId = requestAnimationFrame(radarGameLoopRef);
+                }
+            } catch (e) {}
+        });
+        
+        // 动态适配map文件尺寸
+        let originalCanvasSize = 340; // 原始坐标系统基于340x340
+        let scaleX = 1;
+        let scaleY = 1;
+        /** 游戏坐标系为 340×340 正方形；与手机端小地图一致，使用等比缩放 + 居中，避免非正方形 map 全屏拉伸时 X/Y 比例不一致导致下路等位置偏移 */
+        let gameCoordScale = 1;
+        let gameCoordOffX = 0;
+        let gameCoordOffY = 0;
+        let mapImage = new Image();
+        let mapActualWidth = 340; // map.png的实际宽度（像素）
+        let mapActualHeight = 340; // map.png的实际高度（像素）
+        let mapWidth = 340;
+        let mapHeight = 340;
+        
+        /**
+         * 兵线坐标绕地图中心逆时针旋转 steps×90°（仅影响兵线圆点，不改变英雄/野怪）
+         */
+        function rotateMinionPointAroundMapCenter(x, y, steps) {
+            var W = originalCanvasSize > 0 ? originalCanvasSize : 340;
+            var cx = W / 2;
+            var cy = W / 2;
+            var nx = Number(x) - cx;
+            var ny = Number(y) - cy;
+            var k = ((steps % 4) + 4) % 4;
+            for (var i = 0; i < k; i++) {
+                var tx = -ny;
+                var ty = nx;
+                nx = tx;
+                ny = ty;
+            }
+            return { x: nx + cx, y: ny + cy };
+        }
+        
+        function updateMinionLaneFixButtonLabel() {
+            if (!btnMinionLaneFix) return;
+            var labels = ['0°', '90°', '180°', '270°'];
+            btnMinionLaneFix.textContent = '修复兵线 ' + labels[minionLaneRotationSteps];
+        }
+        
+        function cycleMinionLaneRotation() {
+            minionLaneRotationSteps = (minionLaneRotationSteps + 1) % 4;
+            minionLaneAutoLocked = true; // 用户手动介入后，停止自动改动
+            try {
+                localStorage.setItem('minionLaneRotationSteps', String(minionLaneRotationSteps));
+            } catch (e) { /* ignore */ }
+            updateMinionLaneFixButtonLabel();
+            if (lastProcessedGameData) {
+                processGameData(lastProcessedGameData);
+            }
+            var labels = ['0°', '90°', '180°', '270°'];
+            showSuccess('兵线方向已旋转: ' + labels[minionLaneRotationSteps] + '（可多次点击切换）', 2000);
+        }
+        
+        if (btnMinionLaneFix) {
+            btnMinionLaneFix.addEventListener('click', cycleMinionLaneRotation);
+            btnMinionLaneFix.addEventListener('contextmenu', function(ev) {
+                ev.preventDefault();
+                minionLaneAutoEnabled = !minionLaneAutoEnabled;
+                minionLaneAutoLocked = false;
+                try { localStorage.setItem('minionLaneAutoOff', minionLaneAutoEnabled ? '0' : '1'); } catch (e) {}
+                showSuccess('兵线自动校准已' + (minionLaneAutoEnabled ? '开启' : '关闭'), 1800);
+            });
+        }
+
+        // 悬浮兵线修复按钮事件
+        if (btnMinionLaneFixFloat) {
+            btnMinionLaneFixFloat.addEventListener('click', cycleMinionLaneRotation);
+            btnMinionLaneFixFloat.addEventListener('contextmenu', function(ev) {
+                ev.preventDefault();
+                minionLaneAutoEnabled = !minionLaneAutoEnabled;
+                minionLaneAutoLocked = false;
+                try { localStorage.setItem('minionLaneAutoOff', minionLaneAutoEnabled ? '0' : '1'); } catch (e) {}
+                showSuccess('兵线自动校准已' + (minionLaneAutoEnabled ? '开启' : '关闭'), 1800);
+            });
+        }
+        updateMinionLaneFixButtonLabel();
+
+        function transformMinionPointForEval(x, y, zy, rotSteps) {
+            var mapSize = (originalCanvasSize > 0 ? originalCanvasSize : 340);
+            var px = Number(x);
+            var py = Number(y);
+            var side = Number(zy);
+            if (side === 1) {
+                px = mapSize - px;
+                py = mapSize - py;
+            }
+            if (rotSteps) {
+                var rp = rotateMinionPointAroundMapCenter(px, py, rotSteps);
+                px = rp.x;
+                py = rp.y;
+            }
+            return { x: px, y: py, zy: side };
+        }
+
+        function autoDetectMinionLaneRotation(minions) {
+            if (!minionLaneAutoEnabled || minionLaneAutoLocked) return;
+            if (!Array.isArray(minions) || minions.length < 10) return;
+
+            var bestK = minionLaneRotationSteps;
+            var bestScore = -Infinity;
+            var mapSize = (originalCanvasSize > 0 ? originalCanvasSize : 340);
+            var c = mapSize / 2;
+
+            for (var k = 0; k < 4; k++) {
+                var brx = 0, bry = 0, bcnt = 0;
+                var rrx = 0, rry = 0, rcnt = 0;
+                for (var i = 0; i < minions.length; i++) {
+                    var m = minions[i];
+                    var tp = transformMinionPointForEval(m.x, m.y, m.zy, k);
+                    if (tp.zy === 1) {
+                        brx += tp.x; bry += tp.y; bcnt++;
+                    } else {
+                        rrx += tp.x; rry += tp.y; rcnt++;
+                    }
+                }
+                if (bcnt < 3 || rcnt < 3) continue;
+                var bx = brx / bcnt, by = bry / bcnt;
+                var rx = rrx / rcnt, ry = rry / rcnt;
+                // 目标：红方更靠右上，蓝方更靠左下
+                var sepScore = (rx - bx) + (by - ry);
+                var cornerScore = (rx - c) + (c - ry) + (c - bx) + (by - c);
+                var score = sepScore * 1.5 + cornerScore * 0.6;
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestK = k;
+                }
+            }
+
+            if (bestScore > -Infinity && bestK !== minionLaneRotationSteps) {
+                minionLaneRotationSteps = bestK;
+                try { localStorage.setItem('minionLaneRotationSteps', String(minionLaneRotationSteps)); } catch (e) {}
+                updateMinionLaneFixButtonLabel();
+            }
+            minionLaneAutoLocked = true;
+        }
+        
+        function updateCanvasSize() {
+            if (!canvas_game) return;
+            // 获取radar容器的最大可用尺寸
+            const container = radarContainer || canvas_game.parentElement;
+            const isFullscreen = container && container.classList && container.classList.contains('radar-fullscreen');
+            const maxContainerWidth = isFullscreen
+                ? (window.innerWidth - 40)
+                : (container ? container.clientWidth - 30 : 600);
+            const maxContainerHeight = isFullscreen ? (window.innerHeight - 40) : window.innerHeight * 0.7;
+            // 全屏时不再限制 800，尽量占满窗口的短边
+            const maxCanvasSize = Math.min(maxContainerWidth, maxContainerHeight);
+            
+            let canvasWidth, canvasHeight;
+            
+            if (mapWidth >= mapHeight) {
+                canvasWidth = maxCanvasSize;
+                canvasHeight = (mapHeight / mapWidth) * maxCanvasSize;
+            } else {
+                canvasHeight = maxCanvasSize;
+                canvasWidth = (mapWidth / mapHeight) * maxCanvasSize;
+            }
+            
+            // 更新canvas尺寸
+            canvas_game.width = canvasWidth;
+            canvas_game.height = canvasHeight;
+            
+            // 重新计算缩放比例：基于原始坐标系统(340x340)到canvas尺寸的映射
+            scaleX = canvasWidth / originalCanvasSize;
+            scaleY = canvasHeight / originalCanvasSize;
+            gameCoordScale = Math.min(scaleX, scaleY);
+            gameCoordOffX = (canvasWidth - originalCanvasSize * gameCoordScale) / 2;
+            gameCoordOffY = (canvasHeight - originalCanvasSize * gameCoordScale) / 2;
+            
+            // 更新CSS样式以匹配canvas尺寸，确保地图完整显示
+            canvas_game.style.width = canvasWidth + 'px';
+            canvas_game.style.height = canvasHeight + 'px';
+            
+            // 改尺寸会清空位图，立即重绘底图/上一帧，避免白闪或空白
+            if (typeof lastProcessedGameData !== 'undefined' && lastProcessedGameData) {
+                processGameData(lastProcessedGameData);
+            } else {
+                clearCanvas();
+            }
+        }
+        
+        function setRadarFullscreen(full) {
+            if (!radarContainer) return;
+            isRadarFullscreen = full;
+            if (full) {
+                radarContainer.classList.add('radar-fullscreen');
+                document.body.classList.add('radar-fullscreen-active');
+                if (radarFullscreenToggle) {
+                    radarFullscreenToggle.textContent = '退出全屏';
+                }
+            } else {
+                radarContainer.classList.remove('radar-fullscreen');
+                document.body.classList.remove('radar-fullscreen-active');
+                if (radarFullscreenToggle) {
+                    radarFullscreenToggle.textContent = '全屏';
+                }
+            }
+            updateCanvasSize();
+        }
+        
+        function toggleRadarFullscreen() {
+            setRadarFullscreen(!isRadarFullscreen);
+        }
+        
+        if (radarFullscreenToggle) {
+            radarFullscreenToggle.addEventListener('click', toggleRadarFullscreen);
+        }
+        
+        window.addEventListener('resize', function() {
+            updateCanvasSize();
+        });
+        
+        // 加载map图片以获取实际尺寸并适配到canvas
+        mapImage.onload = function() {
+            mapWidth = mapImage.naturalWidth;
+            mapHeight = mapImage.naturalHeight;
+            
+            // 保存map.png的实际尺寸，用于坐标转换
+            mapActualWidth = mapWidth;
+            mapActualHeight = mapHeight;
+            
+            updateCanvasSize();
+            
+            console.log('Map实际尺寸:', mapWidth, 'x', mapHeight);
+            console.log('Canvas尺寸:', canvas_game.width, 'x', canvas_game.height);
+            console.log('坐标缩放比例:', scaleX, 'x', scaleY, '游戏正方形映射:', gameCoordScale, '偏移', gameCoordOffX, gameCoordOffY);
+            console.log('原始坐标系统:', originalCanvasSize, 'x', originalCanvasSize);
+            console.log('地图已成功适配到canvas，野怪绘制将自动适配');
+        };
+        
+        mapImage.onerror = function() {
+            console.warn('无法加载map.png，使用默认尺寸');
+            updateCanvasSize();
+        };
+        
+        mapImage.src = 'map.png';
+        
+        // 初始缩放比例（如果map加载失败时使用）
+        updateCanvasSize();
+        
+        var 血条背景颜色="#FFFFFF95";
+        var 野怪颜色="#ff4444";
+        var 红方头像边框颜色="red";
+        var 蓝方头像边框颜色="#258DF2";
+        var 红方血条颜色="red";
+        var 蓝方血条颜色="#16b777";
+        var 红方兵线颜色="red";
+        var 蓝方兵线颜色="#258DF2";
+        var 野怪满CD时间=[0,60,70,90,120,240];
+        
+        var 英雄信息=[];
+        
+        function showThisFunction(){
+            showThisData=showThisData==1?0:1;
+            showThis.textContent=showThisData==1?"不显示我方":"显示我方";
+        }
+        
+        // 官网确有英雄头像 JPG 的 ID（预加载）；其余 ID 仍由 ensureHeroImage 按需加载
+        const imagePaths = ["105","106","107","108","109","110","111","112","113","114","115","116","117","118","119","120","121","123","124","125","126","127","128","129","130","131","132","133","134","135","136","137","139","140","141","142","144","146","148","149","150","151","152","153","154","155","156","157","159","162","163","166","167","168","169","170","171","172","173","174","175","176","177","178","179","180","182","183","184","186","187","188","189","190","191","192","193","194","195","196","197","198","199","312","501","502","503","504","505","506","507","508","509","510","511","513","514","515","517","518","519","521","522","523","524","525","527","528","529","531","533","534","536","537","538","540","542","544","545","548","550","558","563","564","577","581","582","584","585","631"];
+        // 透明 1x1 GIF，用于官网无 jpg/png 时避免反复 onerror 与控制台刷屏
+        var HERO_AVATAR_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+        function getOfficialHeroAvatarUrl(heroId) {
+            return "https://game.gtimg.cn/images/yxzj/img201606/heroimg/" + heroId + "/" + heroId + ".jpg";
+        }
+        function getOfficialHeroAvatarPngUrl(heroId) {
+            var id = String(heroId == null ? '' : heroId).trim();
+            return "https://game.gtimg.cn/images/yxzj/img201606/heroimg/" + id + "/" + id + ".png";
+        }
+        function bindHeroAvatarSource(image, heroId) {
+            var id = String(heroId == null ? '' : heroId).trim();
+            if (!id) return;
+            var jpg = getOfficialHeroAvatarUrl(id);
+            var png = getOfficialHeroAvatarPngUrl(id);
+            var stage = 0;
+            image.onerror = function() {
+                if (stage === 0) {
+                    stage = 1;
+                    image.src = png;
+                    return;
+                }
+                if (stage === 1) {
+                    stage = 2;
+                    image.src = jpg + (jpg.indexOf('?') === -1 ? '?' : '&') + '_retry=' + Date.now();
+                    return;
+                }
+                image.onerror = null;
+                image.src = HERO_AVATAR_PLACEHOLDER;
+                if (window.__DEBUG_HERO_AVATAR && !image.__heroAvatarFailLogged) {
+                    image.__heroAvatarFailLogged = true;
+                    console.debug('英雄头像不可用（官网无资源或数据源ID与官网不一致），ID: ' + id);
+                }
+            };
+            image.src = jpg;
+        }
+        
+        console.log("英雄头像列表已加载，共" + imagePaths.length + "个英雄（官网预加载）");
+        
+        // 检查英雄头像可用性统计
+        var heroCheckStats = {
+            total: imagePaths.length,
+            checked: 0,
+            success: 0,
+            failed: 0
+        };
+        
+        // 异步检查英雄头像是否可加载（可选，用于调试）
+        function checkHeroAvatarsAvailability() {
+            console.log("开始检查英雄头像可用性...");
+            heroCheckStats.checked = 0;
+            heroCheckStats.success = 0;
+            heroCheckStats.failed = 0;
+            
+            // 批量检查，每次检查5个，避免过多请求
+            var checkBatch = function(startIndex) {
+                var batchSize = 5;
+                var endIndex = Math.min(startIndex + batchSize, imagePaths.length);
+                var promises = [];
+                
+                for (var i = startIndex; i < endIndex; i++) {
+                    var heroId = imagePaths[i];
+                    var url = getOfficialHeroAvatarUrl(heroId);
+                    
+                    var promise = new Promise(function(resolve) {
+                        var img = new Image();
+                        img.onload = function() {
+                            heroCheckStats.success++;
+                            heroCheckStats.checked++;
+                            resolve({heroId: heroId, success: true});
+                        };
+                        img.onerror = function() {
+                            heroCheckStats.failed++;
+                            heroCheckStats.checked++;
+                            resolve({heroId: heroId, success: false});
+                        };
+                        // 设置超时
+                        setTimeout(function() {
+                            if (!img.complete) {
+                                heroCheckStats.failed++;
+                                heroCheckStats.checked++;
+                                resolve({heroId: heroId, success: false, timeout: true});
+                            }
+                        }, 3000);
+                        img.src = url;
+                    });
+                    promises.push(promise);
+                }
+                
+                Promise.all(promises).then(function(results) {
+                    console.log("已检查: " + heroCheckStats.checked + "/" + heroCheckStats.total + 
+                              " | 成功: " + heroCheckStats.success + " | 失败: " + heroCheckStats.failed);
+                    
+                    if (endIndex < imagePaths.length) {
+                        // 继续检查下一批
+                        setTimeout(function() {
+                            checkBatch(endIndex);
+                        }, 200); // 延迟200ms避免请求过快
+                    } else {
+                        // 检查完成
+                        console.log("=== 英雄头像检查完成 ===");
+                        console.log("总计: " + heroCheckStats.total);
+                        console.log("成功加载: " + heroCheckStats.success + " (" + 
+                                  Math.round(heroCheckStats.success / heroCheckStats.total * 100) + "%)");
+                        console.log("加载失败: " + heroCheckStats.failed + " (" + 
+                                  Math.round(heroCheckStats.failed / heroCheckStats.total * 100) + "%)");
+                    }
+                });
+            };
+            
+            // 开始检查
+            checkBatch(0);
+        }
+        
+        // 在控制台输入 checkHeroAvatarsAvailability() 可以手动触发检查
+        window.checkHeroAvatarsAvailability = checkHeroAvatarsAvailability;
+        
+        // 英雄头像缓存（按需加载）：仅在对局出现该英雄ID时才发起请求
+        const images = [];
+        
+        // 不再启动时批量预加载 imagePaths，改为 ensureHeroImage 按需加载
+
+        /** 预置列表外的英雄 ID（版本新英雄）按需创建官网头像，避免无图不绘制 */
+        function ensureHeroImage(heroId) {
+            var id = String(heroId == null ? '' : heroId).trim();
+            if (!id) return null;
+            if (images[id]) return images[id];
+            var image = new Image();
+            bindHeroAvatarSource(image, id);
+            images[id] = image;
+            return image;
+        }
+        
+        // 优化的canvas绘制函数
+        function drawMapBackground() {
+            var w = canvas_game.width;
+            var h = canvas_game.height;
+            if (w <= 0 || h <= 0) return;
+            var u = gameCoordScale;
+            var ox = gameCoordOffX;
+            var oy = gameCoordOffY;
+            var side = originalCanvasSize * u;
+            context.fillStyle = '#1a1f24';
+            context.fillRect(0, 0, w, h);
+            if (mapImage.complete && mapImage.naturalWidth > 0) {
+                context.drawImage(mapImage, ox, oy, side, side);
+            } else {
+                context.fillStyle = '#1a1f24';
+                context.fillRect(ox, oy, side, side);
+            }
+        }
+        
+        function clearCanvas() {
+            context.clearRect(0, 0, canvas_game.width, canvas_game.height);
+            applyCanvasImageSmoothing();
+            drawMapBackground();
+        }
+        
+        // 统一的游戏数据处理和绘制函数（优化性能）
+        function processGameData(gameDataString) {
+            if (!gameDataString || (typeof gameDataString === 'string' && gameDataString.trim() === '')) {
+                return;
+            }
+            if (typeof gameDataString === 'string') {
+                gameDataString = stripGameDataTimelineSuffix(gameDataString);
+            }
+            lastProcessedGameData = gameDataString;
+            lastProcessedRoomId = homeId || null;
+            
+            try {
+                // 使用requestAnimationFrame确保绘制在下一帧进行，避免阻塞
+                var startTime = performance.now();
+                clearCanvas();
+                var gameDataParts = gameDataString.split("---");
+                
+                // 先绘制英雄（底层）；侧边栏技能面板最多展示 5 人
+                var heroSkillsList = [];
+                if(gameDataParts.length >= 1 && gameDataParts[0]) {
+                    var rwData = gameDataParts[0].split("==");
+                    英雄信息 = rwData;
+                    saveToCache('heroInfo', rwData);
+                    
+                    for (var i = 0; i < rwData.length; i++) {
+                        var rwAll = rwData[i];
+                        if(rwAll && rwAll.trim() !== "") {
+                            var rw = rwAll.split(",");
+                            if(rw.length >= 9 && "" != rw[0]){
+                                var heroImg = ensureHeroImage(rw[0]);
+                                if (!heroImg) continue;
+                                var ultCD = Number(rw[3]);
+                                if(isNaN(ultCD) || ultCD < 0 || ultCD > 600) {
+                                    ultCD = 0;
+                                }
+                                // 部分数据源会把召唤师技能CD放在 rw[4]
+                                var skillCD = Number(rw[4]);
+                                if (isNaN(skillCD) || skillCD < 0 || skillCD > 600) {
+                                    skillCD = undefined;
+                                }
+                                
+                                // 召唤师技能CD（优先使用常见字段，其次扫描扩展字段）
+                                var summoner1CD = undefined;
+                                var summoner2CD = undefined;
+
+                                function cdAt(idx) {
+                                    if (idx < 0 || idx >= rw.length) return undefined;
+                                    var v = Number(rw[idx]);
+                                    // 召唤师技能CD常见范围 0~180，超过则视为无效，避免误读血量等字段
+                                    if (isNaN(v) || v < 0 || v > 180) return undefined;
+                                    return v;
+                                }
+
+                                // 黄色召唤师技能：优先 rw[4]（当前协议最稳定）
+                                var s1Main = cdAt(4);
+                                if (s1Main !== undefined) {
+                                    summoner1CD = s1Main;
+                                } else {
+                                    // 仅当 rw[4] 无效时，回退到历史字段
+                                    var fallback1 = cdAt(9);
+                                    var fallback2 = cdAt(10);
+                                    var fallback3 = cdAt(11);
+                                    var fallback4 = cdAt(12);
+                                    if (fallback1 !== undefined) summoner1CD = fallback1;
+                                    else if (fallback2 !== undefined) summoner1CD = fallback2;
+                                    else if (fallback3 !== undefined) summoner1CD = fallback3;
+                                    else if (fallback4 !== undefined) summoner1CD = fallback4;
+                                }
+                                // 第二个召唤师技能（若有）
+                                if (summoner2CD === undefined) {
+                                    var s2a = cdAt(10);
+                                    var s2b = cdAt(11);
+                                    var s2c = cdAt(12);
+                                    if (s2a !== undefined && s2a !== summoner1CD) summoner2CD = s2a;
+                                    else if (s2b !== undefined && s2b !== summoner1CD) summoner2CD = s2b;
+                                    else if (s2c !== undefined && s2c !== summoner1CD) summoner2CD = s2c;
+                                }
+                                
+                                // 获取英雄等级
+                                var heroLevel = undefined;
+                                if(rw[1] !== undefined && rw[1] !== '') {
+                                    var levelValue = Number(rw[1]);
+                                    if(!isNaN(levelValue) && levelValue >= 1 && levelValue <= 30) {
+                                        heroLevel = levelValue;
+                                    }
+                                }
+                                if(heroLevel === undefined && rw[2] !== undefined && rw[2] !== '') {
+                                    var levelValue2 = Number(rw[2]);
+                                    if(!isNaN(levelValue2) && levelValue2 >= 1 && levelValue2 <= 30) {
+                                        heroLevel = levelValue2;
+                                    }
+                                }
+                                // 确保阵营值被正确解析（zy: 1=蓝方, 其他=红方）
+                                var zy = Number(rw[8]);
+                                if(isNaN(zy)) {
+                                    zy = 0; // 默认红方
+                                }
+                                var summonerSkillIdParsed = resolveSummonerSkillIdForHero(rw, summoner1CD);
+                                if (window.__LOG_RW_SUMMONER && summoner1CD !== undefined && summonerSkillIdParsed === undefined) {
+                                    try { console.warn('[summoner] 未从 rw 解析到召唤师资源 ID，列:', rw); } catch (eLog) {}
+                                }
+                                // 收集全部英雄用于技能面板合并（面板最终仍会做数量上限与排序）
+                                var lifeState = parseHeroLifeState(rw[7]);
+                                heroSkillsList.push({
+                                    heroId: String(rw[0]),
+                                    ultCD: ultCD,
+                                    summoner1CD: summoner1CD,
+                                    summonerSkillId: summonerSkillIdParsed,
+                                    zy: zy,
+                                    level: heroLevel,
+                                    isDead: lifeState.isDead,
+                                    deathCD: lifeState.deathCD
+                                });
+                                var heroDrawX = Number(rw[5]) + mapOffsetHeroX;
+                                var heroDrawY = Number(rw[6]) + mapOffsetHeroY;
+                                var sp = smoothHeroMapPos(rw[0], heroDrawX, heroDrawY);
+                                drawImageAtPosition(sp.x, sp.y, heroImg, 40, 40, zy, 1, ultCD, skillCD, summoner1CD, summoner2CD, heroLevel, rw[7], String(rw[0]), summonerSkillIdParsed);
+                            }
+                        }
+                    }
+                }
+                if (!isMobileSkillOnAvatar()) {
+                    updateHeroSkillPanel(mergeHeroSkillPanelData(heroSkillsList));
+                }
+                
+                // 绘制防御塔数据（如果存在）
+                if(gameDataParts.length >= 4 && gameDataParts[3]) {
+                    var towerData = gameDataParts[3].split("==");
+                    for (var i = 0; i < towerData.length; i++) {
+                        var towerAll = towerData[i];
+                        if(towerAll && towerAll.trim() !== "") {
+                            var tower = towerAll.split(",");
+                            if(tower.length >= 6) {
+                                绘制防御塔(tower[0], tower[1], tower[2], tower[3], tower[4], tower[5]);
+                            }
+                        }
+                    }
+                }
+                
+                // ===== 绘制兵线（在野怪之下、英雄之上）=====
+                if (gameDataParts.length >= 3 && gameDataParts[2]) {
+                    var minionData = gameDataParts[2].split("==");
+                    var minionSamples = [];
+                
+                    for (var i = 0; i < minionData.length; i++) {
+                        var minionAll = minionData[i];
+                        if (!minionAll || !minionAll.trim()) continue;
+                
+                        var minion = minionAll.split(",");
+                        if (minion.length < 3) continue;
+                
+                        var minionX = Number(minion[0]);
+                        var minionY = Number(minion[1]);
+                        var minionZy = Number(minion[2]);
+                        var minionRadius = minion[3] ? Number(minion[3]) : 4;
+                
+                        if (!isNaN(minionX) && !isNaN(minionY)) {
+                            minionSamples.push({ x: minionX, y: minionY, zy: minionZy });
+                            drawFilledCircle(minionX + mapOffsetMinionX, minionY + mapOffsetMinionY, minionRadius, minionZy);
+                        }
+                    }
+                    autoDetectMinionLaneRotation(minionSamples);
+                }
+                
+                // 最后绘制野怪（最上层）- 优化：合并遍历，减少循环次数
+                if(gameDataParts.length >= 3 && gameDataParts[1]) {
+                    var ygData = gameDataParts[1].split("==");
+                    
+                    // 提前定义变量
+                    var cd1660221 = null;
+                    var cd166009 = null;
+                    var cd166012 = null;
+                    var cd166022 = null;
+                    
+                    // 优化：第一次遍历获取关键CD值
+                    for (var j = 0; j < ygData.length; j++) {
+                        var ygAll = ygData[j];
+                        if(!ygAll || !ygAll.trim()) continue;
+                        var yg = ygAll.split(",");
+                        if(yg.length < 5) continue;
+                        
+                        var id = yg[2];
+                        var cd = Number(yg[1]);
+                        if (id === "1660221") {
+                            cd1660221 = cd;
+                        } else if (id === "166009") {
+                            cd166009 = cd;
+                        } else if (id === "166022") {
+                            cd166022 = cd;
+                        }
+                    }
+                    
+                    // 第二次遍历：绘制野怪（此时所有CD值已获取）
+                    for (var i = 0; i < ygData.length; i++) {
+                        var ygAll = ygData[i];
+                        if(!ygAll || !ygAll.trim()) continue;
+                        var yg = ygAll.split(",");
+                        if(yg.length < 5) continue;
+                        
+                        var 野怪CD = Number(yg[1]);
+                        var id = yg[2];
+                        var 野怪X = Number(yg[3]);
+                        var 野怪Y = Number(yg[4]);
+                        
+                        // 跳过特定坐标
+                        if (野怪X == 108 && 野怪Y == 104) {
+                            continue;
+                        }
+                        
+                        // 根据规则判断是否应该隐藏倒计时
+                        var hideCountdown = false;
+                        if (cd1660221 !== null && cd1660221 <= 180 && cd1660221 != 0 ) {
+                            if (id === "166009" || id === "166018" || id === "166012"|| id === "166022") {
+                                hideCountdown = true;
+                            }
+                        } else if (cd166009 !== null && cd166009 <= 210 && cd166009 != 0) {
+                            if (id === "166018") {
+                                hideCountdown = true;
+                            }
+                        }
+                        if (cd166022 !== null && cd166022 <= 210 && cd166022 != 0) {
+                            if (id === "166012") {
+                                hideCountdown = true;
+                            }
+                        }
+                        
+                        // 绘制野怪（偏移在原始坐标判定之后应用，避免误判特殊坐标点）
+                        var drawMonsterX = 野怪X + mapOffsetMonsterX;
+                        var drawMonsterY = 野怪Y + mapOffsetMonsterY;
+                        if (!isNaN(drawMonsterX) && !isNaN(drawMonsterY) && drawMonsterX >= 0 && drawMonsterY >= 0) {
+                            var isFullCDTime = false;
+                            for(var k = 0; k < 野怪满CD时间.length; k++) {
+                                if(野怪满CD时间[k] == 野怪CD) {
+                                    isFullCDTime = true;
+                                    break;
+                                }
+                            }
+                            
+                            if(hideCountdown || isFullCDTime || 野怪CD === 0) {
+                                drawText(drawMonsterX, drawMonsterY, '0', 5, -5);
+                            } else if(野怪CD > 0 && 野怪CD <= 240) {
+                                drawText(drawMonsterX, drawMonsterY, yg[1], 5, -5);
+                            }
+                        }
+                    }
+                }
+                
+                // 更新地图旋转（避免 NaN 导致后续 className/绘制异常）
+                if(gameDataParts.length >= 5 && gameDataParts[4] !== undefined && gameDataParts[4] !== '') {
+                    var rotPart = Number(gameDataParts[4]);
+                    mapImageRotate = (rotPart === 1) ? 1 : 0;
+                }
+            } catch(e) {
+                var errorMsg = "处理游戏数据失败: " + e.message;
+                showError(errorMsg);
+                console.error("处理游戏数据时出错:", e);
+                var cachedHeroInfo = getFromCache('heroInfo');
+                if(cachedHeroInfo && cachedHeroInfo.length > 0) {
+                    英雄信息 = cachedHeroInfo;
+                    showSuccess("已加载缓存的游戏数据");
+                }
+            }
+        }
+        
+        function persistMapOffsets() {
+            try {
+                localStorage.setItem('mapOffsetHeroX', String(mapOffsetHeroX));
+                localStorage.setItem('mapOffsetHeroY', String(mapOffsetHeroY));
+                localStorage.setItem('mapOffsetMinionX', String(mapOffsetMinionX));
+                localStorage.setItem('mapOffsetMinionY', String(mapOffsetMinionY));
+                localStorage.setItem('mapOffsetMonsterX', String(mapOffsetMonsterX));
+                localStorage.setItem('mapOffsetMonsterY', String(mapOffsetMonsterY));
+            } catch (e) { /* ignore */ }
+        }
+        
+        function initMapCalibrationPanel() {
+            function clampOffInput(v) {
+                var n = parseInt(v, 10);
+                if (isNaN(n)) return 0;
+                return Math.max(-340, Math.min(340, n));
+            }
+            var pairs = [
+                { id: 'offHeroX', label: 'valHeroX', get: function() { return mapOffsetHeroX; }, set: function(v) { mapOffsetHeroX = v; } },
+                { id: 'offHeroY', label: 'valHeroY', get: function() { return mapOffsetHeroY; }, set: function(v) { mapOffsetHeroY = v; } },
+                { id: 'offMinionX', label: 'valMinionX', get: function() { return mapOffsetMinionX; }, set: function(v) { mapOffsetMinionX = v; } },
+                { id: 'offMinionY', label: 'valMinionY', get: function() { return mapOffsetMinionY; }, set: function(v) { mapOffsetMinionY = v; } },
+                { id: 'offMonsterX', label: 'valMonsterX', get: function() { return mapOffsetMonsterX; }, set: function(v) { mapOffsetMonsterX = v; } },
+                { id: 'offMonsterY', label: 'valMonsterY', get: function() { return mapOffsetMonsterY; }, set: function(v) { mapOffsetMonsterY = v; } }
+            ];
+            function redrawIfData() {
+                if (lastProcessedGameData) {
+                    processGameData(lastProcessedGameData);
+                }
+            }
+            pairs.forEach(function(p) {
+                var inp = document.getElementById(p.id);
+                var span = document.getElementById(p.label);
+                if (!inp) return;
+                inp.value = String(p.get());
+                if (span) span.textContent = String(p.get());
+                inp.addEventListener('input', function() {
+                    var v = clampOffInput(inp.value);
+                    if (String(v) !== String(inp.value)) inp.value = String(v);
+                    p.set(v);
+                    if (span) span.textContent = String(v);
+                    persistMapOffsets();
+                    redrawIfData();
+                });
+            });
+            var btnReset = document.getElementById('mapCalibReset');
+            if (btnReset) {
+                btnReset.addEventListener('click', function() {
+                    pairs.forEach(function(p) {
+                        p.set(0);
+                        var inp = document.getElementById(p.id);
+                        var span = document.getElementById(p.label);
+                        if (inp) inp.value = '0';
+                        if (span) span.textContent = '0';
+                    });
+                    persistMapOffsets();
+                    redrawIfData();
+                    showSuccess('已恢复默认偏移', 1500);
+                });
+            }
+        }
+        
+        // 兵线渲染开关
+        var hideAllMinions = false;
+
+        function drawFilledCircle(x, y, radius, zy) {
+            // 全局关闭兵线显示
+            if (hideAllMinions) {
+                return;
+            }
+            try {
+                // 若坐标以上帝视角上报，蓝方兵线需要做中心对称翻转后才能与当前地图方向对齐
+                var mapSize = (originalCanvasSize > 0 ? originalCanvasSize : 340);
+                if (zy === 1 || zy === '1') {
+                    x = mapSize - Number(x);
+                    y = mapSize - Number(y);
+                }
+                
+                // 用户手动修正兵线整体朝向（与三路推进方向对齐），每次点击逆时针旋转90°
+                if (minionLaneRotationSteps) {
+                    var rp = rotateMinionPointAroundMapCenter(x, y, minionLaneRotationSteps);
+                    x = rp.x;
+                    y = rp.y;
+                }
+        
+                // 验证并转换坐标
+                x = Number(x);
+                y = Number(y);
+                zy = Number(zy);
+                radius = Number(radius) || 4;
+                
+                // 验证坐标是否有效
+                if(isNaN(x) || isNaN(y) || x < 0 || y < 0) {
+                    return; // 无效坐标，跳过绘制
+                }
+                
+                // 应用缩放（与地图同一套正方形坐标变换）
+                var scaledX = gameCoordOffX + x * gameCoordScale;
+                var scaledY = gameCoordOffY + y * gameCoordScale;
+                var scaledRadius = radius * gameCoordScale;
+                
+                // 验证坐标是否在canvas范围内（可选，允许超出范围绘制）
+                context.beginPath();
+                context.arc(scaledX, scaledY, scaledRadius, 0, Math.PI * 2);
+                // 阵营判断：1=蓝方，其他=红方（确保zy是数字类型）
+                var minionColor = (zy === 1 || zy === '1') ? 蓝方兵线颜色 : 红方兵线颜色;
+                context.fillStyle = minionColor;
+                context.fill();
+                context.closePath();
+            } catch(e) {
+                console.error("绘制兵线时出错:", e, "x:", x, "y:", y, "radius:", radius, "zy:", zy);
+            }
+        }
+        
+        function drawText(x, y, text, offsetX, offsetY) {
+            // 先转换为数字
+            x = Number(x);
+            y = Number(y);
+            
+            // 验证坐标有效性
+            if(isNaN(x) || isNaN(y)) {
+                return;
+            }
+            
+            // 应用缩放：将游戏坐标系统(340x340)映射到canvas（与地图一致）
+            var scaledX = gameCoordOffX + x * gameCoordScale;
+            var scaledY = gameCoordOffY + y * gameCoordScale;
+            
+            // 如果有偏移量，在缩放后应用（避免偏移被缩放导致错位）
+            if(offsetX !== undefined && offsetY !== undefined) {
+                scaledX += offsetX * gameCoordScale;
+                scaledY += offsetY * gameCoordScale;
+            }
+            
+            // 优化：使用更高效的方式检查满CD
+            var 野怪cd = Number(text);
+            var isFullCD = false;
+            for(var i = 0; i < 野怪满CD时间.length; i++) {
+                if(野怪满CD时间[i] == 野怪cd) {
+                    isFullCD = true;
+                    野怪cd = 0;
+                    break;
+                }
+            }
+            
+            // 添加背景以提高可见性（野怪在最上层）
+            context.save();
+            if(isFullCD || 野怪cd == 0){
+                // CD为0时显示圆点，增大尺寸并添加边框
+                var radius = 5 * gameCoordScale;
+                context.beginPath();
+                context.arc(scaledX, scaledY, radius, 0, Math.PI * 2);
+                context.fillStyle = 野怪颜色;
+                context.fill();
+                // 添加白色边框提高可见性
+                context.strokeStyle = '#ffffff';
+                context.lineWidth = 1.5 * gameCoordScale;
+                context.stroke();
+                context.closePath();
+            }else{
+                // CD大于0时显示数字，添加背景
+                var fontSize = Math.max(12 * gameCoordScale, 10);
+                context.font = 'bold ' + fontSize + 'px Arial';
+                
+                // 测量文字宽度
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                var textWidth = context.measureText(野怪cd).width;
+                var padding = 4 * gameCoordScale;
+                
+                // 绘制半透明背景（矩形）
+                var bgX = scaledX - textWidth / 2 - padding;
+                var bgY = scaledY - fontSize / 2 - padding;
+                var bgW = textWidth + padding * 2;
+                var bgH = fontSize + padding * 2;
+                
+                context.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                context.fillRect(bgX, bgY, bgW, bgH);
+                
+                // 绘制文字
+                context.fillStyle = 野怪颜色;
+                context.fillText(野怪cd, scaledX, scaledY);
+            }
+            // 注意：context.save()在函数开始，restore在这里
+            context.restore();
+        }
+
+        function drawImageAtPosition(x, y, image, width, height, zy, hc, ultCD, skillCD, summoner1CD, summoner2CD, level, hp, heroId, summonerSkillId) {
+            try {
+                if(!image) {
+                    return;
+                }
+                if(image.complete && image.naturalWidth > 0) {
+                    x = gameCoordOffX + Number(x) * gameCoordScale;
+                    y = gameCoordOffY + Number(y) * gameCoordScale;
+                    width = Number(width) * gameCoordScale;
+                    height = Number(height) * gameCoordScale;
+                    zy = Number(zy);
+                    hc = Number(hc);
+                    
+                    // 边界检测：头像与附属信息不超出 canvas（手机端技能在右侧竖排，预留横向空间）
+                    var sMin = gameCoordScale;
+                    var mobileSkillLayout = isMobileSkillOnAvatar();
+                    if (mobileSkillLayout) {
+                        var _isz = Math.max(17 * sMin, 16);
+                        var _pad = 2.5 * sMin;
+                        var expandR = _isz + _pad * 1.15 + 4;
+                        var needRight = x + width + expandR;
+                        if (needRight > canvas_game.width) {
+                            x -= (needRight - canvas_game.width);
+                        }
+                        if (x < 2) x = 2;
+                    }
+                    var hpY = y + height;
+                    var cdY = hpY + 12 * gameCoordScale;
+                    var maxCDHeight = 12 * gameCoordScale;
+                    var contentBottom = mobileSkillLayout ? (y + height + 8) : (cdY + maxCDHeight);
+                    if (contentBottom + 10 > canvas_game.height) {
+                        y -= (contentBottom + 10 - canvas_game.height);
+                    } else if (y <= 10) {
+                        y += (mobileSkillLayout ? 8 : maxCDHeight) + 10;
+                    }
+                    
+                    // 整像素 + 偶数宽高：圆心恒为整数坐标，避免半像素圆与 clip 每帧采样变化
+                    x = Math.round(x);
+                    y = Math.round(y);
+                    width = Math.round(Math.max(width, 1));
+                    height = Math.round(Math.max(height, 1));
+                    if ((width & 1) !== 0) width += 1;
+                    if ((height & 1) !== 0) height += 1;
+                    var centerX = x + (width >> 1);
+                    var centerY = y + (height >> 1);
+                    var radius = Math.max(1, Math.floor(Math.min(width, height) / 2) - 2);
+                    var _prevSmooth = context.imageSmoothingEnabled;
+                    var _prevQ = context.imageSmoothingQuality;
+                    try {
+                        context.imageSmoothingEnabled = true;
+                        if (typeof context.imageSmoothingQuality === 'string') {
+                            context.imageSmoothingQuality = 'high';
+                        }
+                    } catch (eSmooth) {}
+                    
+                    // 绘制头像（使用clip）
+                    context.save();
+                    context.beginPath();
+                    context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+                    context.clip();
+                    context.drawImage(image, x, y, width, height);
+                    context.restore();
+                    
+                    try {
+                        context.imageSmoothingEnabled = _prevSmooth;
+                        if (typeof context.imageSmoothingQuality === 'string') {
+                            context.imageSmoothingQuality = (typeof _prevQ === 'string') ? _prevQ : 'medium';
+                        }
+                    } catch (eR) {}
+                    
+                    // 批量绘制边框和圆圈（减少状态切换）
+                    context.save();
+                    // 头像边框按阵营着色（zy: 1=蓝方，其他=红方）
+                    var avatarBorderColor = (zy === 1 || zy === '1') ? 蓝方头像边框颜色 : 红方头像边框颜色;
+                    context.beginPath();
+                    context.arc(centerX, centerY, radius + 1, 0, Math.PI * 2);
+                    context.strokeStyle = avatarBorderColor;
+                    context.lineWidth = Math.max(1, Math.round(4 * gameCoordScale * 2) / 2);
+                    context.stroke();
+
+                    // 环形血条：必须与头像使用同一套“最终绘制坐标”，避免边缘位置错位
+                    var hpNum = Number(hp);
+                    if (!isNaN(hpNum)) {
+                        hpNum = Math.max(0, Math.min(100, hpNum));
+                        var ringWidth = Math.max(3 * sMin, 2);
+                        var ringRadius = radius + 1 + ringWidth * 0.9;
+                        var hpColor = (zy === 1 || zy === '1') ? 蓝方血条颜色 : 红方血条颜色;
+                        var startAngle = -Math.PI / 2;
+                        var endAngle = startAngle + (Math.PI * 2 * (hpNum / 100));
+
+                        context.beginPath();
+                        context.arc(centerX, centerY, ringRadius, 0, Math.PI * 2);
+                        context.strokeStyle = 血条背景颜色;
+                        context.lineWidth = ringWidth;
+                        context.lineCap = 'round';
+                        context.stroke();
+
+                        if (hpNum > 0) {
+                            context.beginPath();
+                            context.arc(centerX, centerY, ringRadius, startAngle, endAngle, false);
+                            context.strokeStyle = hpColor;
+                            context.lineWidth = ringWidth;
+                            context.lineCap = 'round';
+                            context.stroke();
+                        }
+                    }
+                    
+                    context.restore();
+
+                    // 在头像上显示等级（右上角）
+                    if(level !== undefined && level !== null && level !== '') {
+                        drawHeroLevel(x, y, width, height, level, zy);
+                    }
+
+                    // 手机端：大招 / 召唤师技能图标（与侧边栏同源：英雄 ID + rw 解析的召唤师技能 ID）
+                    if (isMobileSkillOnAvatar()) {
+                        drawMobileSkillBadgesOnAvatar(x, y, width, height, ultCD, summoner1CD, heroId, summonerSkillId);
+                    }
+                }
+            } catch(e) {
+                console.error("绘制头像时出错:", e);
+            }
+        }
+
+        function isMobileSkillOnAvatar() {
+            try {
+                return window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+            } catch (e) {
+                return window.innerWidth <= 768;
+            }
+        }
+
+        /**
+         * 大招图标后缀：默认从 hero_ult_suffix.json（按官网技能冷却值最大槽位生成）加载。
+         * 可在控制台覆盖：window.__HERO_ULT_SKILL_SUFFIX = { '548': '40' }
+         */
+        var HERO_ULT_SKILL_SUFFIX = { '188': '03', '581': '07' };
+        // 四技能/多槽位英雄的稳定修正（优先级高于自动映射）
+        var HERO_ULT_SKILL_SUFFIX_FORCE = {
+            '125': '40', '153': '30', '170': '40', '179': '40', '182': '40', '191': '40',
+            '531': '40', '502': '40', '507': '40', '509': '40', '517': '40', '529': '40', '540': '40',
+            '188': '03', '581': '07'
+        };
+        var __heroUltSuffixFetchStarted = false;
+        var __heroUltSuffixLoaded = false;
+        function skillUltSkillSuffix(heroId) {
+            var s = String(heroId);
+            try {
+                if (window.__HERO_ULT_SKILL_SUFFIX && window.__HERO_ULT_SKILL_SUFFIX[s] !== undefined && window.__HERO_ULT_SKILL_SUFFIX[s] !== null) {
+                    return String(window.__HERO_ULT_SKILL_SUFFIX[s]);
+                }
+            } catch (e) { /* ignore */ }
+            if (HERO_ULT_SKILL_SUFFIX_FORCE[s] !== undefined) return HERO_ULT_SKILL_SUFFIX_FORCE[s];
+            if (HERO_ULT_SKILL_SUFFIX[s] !== undefined) return HERO_ULT_SKILL_SUFFIX[s];
+            ensureHeroUltSuffixMapLoaded();
+            return '30';
+        }
+        // 让浏览器不要复用上一季/旧资源：页面级缓存破坏（不落盘、不写 skill/ 本地目录）
+        var CDN_BUST = Date.now();
+        function ensureHeroUltSuffixMapLoaded() {
+            if (__heroUltSuffixFetchStarted || __heroUltSuffixLoaded) return;
+            __heroUltSuffixFetchStarted = true;
+            fetch('hero_ult_suffix.json?v=' + CDN_BUST, { cache: 'no-store' })
+                .then(function(r) {
+                    if (!r.ok) throw new Error('http ' + r.status);
+                    return r.json();
+                })
+                .then(function(map) {
+                    if (!map || typeof map !== 'object') return;
+                    var next = {};
+                    for (var k in map) {
+                        if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
+                        var key = String(k);
+                        var val = String(map[k] == null ? '' : map[k]).trim();
+                        if (!/^\d{2}$/.test(val)) continue;
+                        next[key] = val;
+                    }
+                    next['188'] = '03';
+                    next['581'] = '07';
+                    HERO_ULT_SKILL_SUFFIX = next;
+                    __heroUltSuffixLoaded = true;
+                })
+                .catch(function() {
+                    // ignore and keep built-in fallback
+                });
+        }
+        function cdnNoCache(url) {
+            try {
+                return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'v=' + CDN_BUST;
+            } catch (e) {
+                return url;
+            }
+        }
+        function skillUltCdnUrlWithSuffix(heroId, suffix) {
+            var s = String(heroId);
+            return cdnNoCache('https://game.gtimg.cn/images/yxzj/img201606/heroimg/' + encodeURIComponent(s) + '/' + encodeURIComponent(s) + suffix + '.png');
+        }
+        /** 大招图 URL 顺序：优先后缀 → CDN → 另一后缀（30↔40）及 CDN，兼容缺文件或错用 30 的情况 */
+        function skillUltUrlChain(heroId) {
+            var s = String(heroId);
+            if (s === '188') {
+                return [cdnNoCache('https://game.gtimg.cn/images/yxzj/img201606/heroimg/188/18803.png')];
+            }
+            if (s === '581') {
+                return [cdnNoCache('https://game.gtimg.cn/images/yxzj/img201606/heroimg/581/58107.png')];
+            }
+            var suf = skillUltSkillSuffix(s);
+            var candidates = [suf, '40', '30', '20', '10', '00', '32', '50', '60', '70', '80', '90'];
+            var out = [];
+            var seen = {};
+            for (var i = 0; i < candidates.length; i++) {
+                var c = String(candidates[i]);
+                if (!/^\d{2}$/.test(c)) continue;
+                if (seen[c]) continue;
+                seen[c] = true;
+                out.push(skillUltCdnUrlWithSuffix(s, c));
+            }
+            return out;
+        }
+        // 兼容旧变量名：不再返回本地路径，全部走 CDN（不落盘）
+        function skillUltAssetPath(heroId) {
+            return skillUltCdnUrl(heroId);
+        }
+        function skillSummonerAssetPath(summonerId) {
+            return cdnNoCache('https://game.gtimg.cn/images/yxzj/img201606/summoner/' + String(summonerId) + '.jpg');
+        }
+        /** 与 pvp.qq.com/web201605/js/summoner.json 一致；未知 ID 时回退带数字便于排查 */
+        /** 惩击两形态：80104=小打野刀惩击，80116=二级打野刀惩击 */
+        var SUMMONER_ID_TO_NAME = {
+            80104: '惩击', 80116: '惩击', 80108: '终结', 80110: '狂暴', 80109: '疾跑', 80102: '治疗术',
+            80105: '干扰', 80103: '晕眩', 80107: '净化', 80121: '弱化', 80115: '闪现', 80117: '传送', 80118: '传送'
+        };
+        var summonerNameMapPromise = null;
+        function ensureSummonerNameMap(done) {
+            if (window.__summonerNameById) {
+                done();
+                return;
+            }
+            if (!summonerNameMapPromise) {
+                function parseSummonerNameMap(arr) {
+                    var m = {};
+                    if (Array.isArray(arr)) {
+                        for (var i = 0; i < arr.length; i++) {
+                            var s = arr[i];
+                            if (s && s.summoner_id != null && s.summoner_name) {
+                                m[String(s.summoner_id)] = String(s.summoner_name);
+                            }
+                        }
+                    }
+                    return m;
+                }
+                summonerNameMapPromise = fetch('api/index.php?module=summoner_list&_=' + Date.now(), { cache: 'no-store' })
+                    .then(function(r) {
+                        if (!r.ok) throw new Error('api summoner_list not ok');
+                        return r.json();
+                    })
+                    .then(function(payload) {
+                        if (payload && Number(payload.code) === 0 && Array.isArray(payload.data)) return payload.data;
+                        throw new Error('api summoner_list payload invalid');
+                    })
+                    .catch(function() {
+                        return fetch('summoner.json', { cache: 'force-cache' })
+                            .then(function(r2) {
+                                if (!r2.ok) throw new Error('local summoner not ok');
+                                return r2.json();
+                            });
+                    })
+                    .then(function(arr) {
+                        window.__summonerNameById = parseSummonerNameMap(arr);
+                    })
+                    .catch(function() {
+                        window.__summonerNameById = {};
+                    });
+            }
+            summonerNameMapPromise.then(function() { done(); });
+        }
+        // 官方资源中并非每个上报 ID 都有独立图，先映射到可用图标 ID，避免出现空白图标
+        var SUMMONER_ICON_ID_ALIAS = {
+            80116: 80104,
+            80117: 80118
+        };
+        function getSummonerIconIdChain(summonerId) {
+            var n = Number(summonerId);
+            if (isNaN(n)) return [];
+            // 惩击双形态互为回退，确保图标随对局形态切换且缺图时可自动兜底
+            if (n === 80104) return [80104];
+            if (n === 80116) return [80116, 80104];
+            if (SUMMONER_ICON_ID_ALIAS[n] !== undefined) return [n, Number(SUMMONER_ICON_ID_ALIAS[n])];
+            return [n];
+        }
+        function getSummonerIconUrlChain(summonerId) {
+            var ids = getSummonerIconIdChain(summonerId);
+            var urls = [];
+            for (var i = 0; i < ids.length; i++) {
+                var idRaw = Number(ids[i]);
+                var idForAsset = SUMMONER_ICON_ID_ALIAS[idRaw] !== undefined ? Number(SUMMONER_ICON_ID_ALIAS[idRaw]) : idRaw;
+                var sid = String(idForAsset);
+                urls.push(cdnNoCache('https://game.gtimg.cn/images/yxzj/img201606/summoner/' + sid + '.jpg'));
+                urls.push(cdnNoCache('https://game.gtimg.cn/images/yxzj/img201606/summoner/' + sid + '.png'));
+                urls.push(cdnNoCache('https://game.gtimg.cn/images/yxzj/img201606/summonero/' + sid + '.png'));
+            }
+            return urls;
+        }
+        function getSummonerSkillDisplayName(summonerSkillId) {
+            if (summonerSkillId === undefined || summonerSkillId === null) return '召唤师技能';
+            var n = Number(summonerSkillId);
+            if (isNaN(n)) return '召唤师技能';
+            try {
+                var m2 = window.__summonerNameById;
+                if (m2 && m2[String(n)]) return m2[String(n)];
+            } catch (e) {}
+            var nm = SUMMONER_ID_TO_NAME[n];
+            return nm ? nm : '召唤师技能(' + n + ')';
+        }
+        function skillUltCdnUrl(heroId) {
+            var s = String(heroId);
+            if (s === '188') return cdnNoCache('https://game.gtimg.cn/images/yxzj/img201606/heroimg/188/18803.png');
+            if (s === '581') return cdnNoCache('https://game.gtimg.cn/images/yxzj/img201606/heroimg/581/58107.png');
+            return skillUltCdnUrlWithSuffix(s, skillUltSkillSuffix(s));
+        }
+
+        /** 多张技能图同时 onload 时合并为单帧重绘，减少连续整帧解析与绘制 */
+        function scheduleRedrawFromCachedSkillIcons() {
+            if (window.__skillIconRedrawRaf) return;
+            window.__skillIconRedrawRaf = true;
+            requestAnimationFrame(function() {
+                window.__skillIconRedrawRaf = false;
+                // 只允许重绘当前房间的最后一帧，避免切房间后图片 onload 把旧房间刷回来
+                if (lastProcessedRoomId && homeId && lastProcessedRoomId !== homeId) return;
+                if (typeof lastProcessedGameData === 'string' && lastProcessedGameData) {
+                    try { processGameData(lastProcessedGameData); } catch (err) {}
+                }
+            });
+        }
+
+        /**
+         * 手机端技能小图标缓存。
+         * primarySrc 为字符串时：失败则换 fallbackSrc（兼容旧调用）。
+         * primarySrc 为数组时：按顺序尝试多个 URL（用于大招 30/40 链式回退）。
+         */
+        function getCachedMobileSkillIcon(key, primarySrc, fallbackSrc) {
+            var urls;
+            if (Array.isArray(primarySrc)) {
+                urls = primarySrc.filter(function(u) { return u && typeof u === 'string'; });
+            } else {
+                urls = [];
+                if (primarySrc) urls.push(primarySrc);
+                if (fallbackSrc) urls.push(fallbackSrc);
+            }
+            if (urls.length === 0) {
+                var empty = new Image();
+                return empty;
+            }
+            var c = window.__mobileSkillIconCache = window.__mobileSkillIconCache || {};
+            if (c[key]) return c[key];
+            var img = new Image();
+            c[key] = img;
+            function isGtimg(u) {
+                return typeof u === 'string' && u.indexOf('game.gtimg.cn') >= 0;
+            }
+            var idx = 0;
+            img.onload = function() {
+                scheduleRedrawFromCachedSkillIcons();
+            };
+            function tryNext() {
+                if (idx >= urls.length) return;
+                var u = urls[idx++];
+                img.onerror = function() {
+                    this.onerror = null;
+                    tryNext();
+                };
+                img.crossOrigin = isGtimg(u) ? 'anonymous' : null;
+                img.src = u;
+            }
+            tryNext();
+            return img;
+        }
+
+        function drawMobileSkillBadgesOnAvatar(x, y, width, height, ultCD, summoner1CD, heroId, summonerSkillId) {
+            try {
+                var sMin = Math.min(scaleX, scaleY);
+                var iconSz = Math.max(17 * sMin, 16);
+                var pad = 2.5 * sMin;
+                var colCx = x + width + iconSz / 2 + pad * 1.15;
+                var hid = heroId != null ? String(heroId) : '';
+                var hasUlt = !!hid;
+                var hasSum = summonerSkillId !== undefined && summonerSkillId !== null && !isNaN(Number(summonerSkillId));
+
+                function drawSkillIcon(img, cx, cy, size, cdValue) {
+                    if (!img || !img.complete || img.naturalWidth <= 0) return;
+                    var half = size / 2;
+                    var dx = cx - half;
+                    var dy = cy - half;
+                    var n = Number(cdValue);
+                    var cooling = !isNaN(n) && n > 0;
+
+                    context.save();
+                    context.beginPath();
+                    if (typeof context.roundRect === 'function') {
+                        context.roundRect(dx, dy, size, size, Math.max(2 * sMin, 2));
+                    } else {
+                        context.rect(dx, dy, size, size);
+                    }
+                    context.clip();
+                    context.globalAlpha = cooling ? 0.55 : 1;
+                    context.drawImage(img, dx, dy, size, size);
+                    context.restore();
+
+                    if (cooling) {
+                        context.save();
+                        context.fillStyle = 'rgba(0, 0, 0, 0.48)';
+                        context.fillRect(dx, dy, size, size);
+                        var fontSize = Math.max(8 * sMin, 7);
+                        context.fillStyle = '#ffffff';
+                        context.font = 'bold ' + fontSize + 'px Arial';
+                        context.textAlign = 'center';
+                        context.textBaseline = 'middle';
+                        context.fillText(Math.ceil(n).toString(), cx, cy);
+                        context.restore();
+                    }
+                }
+
+                var gap = Math.max(2.5 * sMin, 2);
+                if (hasUlt && hasSum) {
+                    var stackH = iconSz * 2 + gap;
+                    var y0 = y + (height - stackH) / 2;
+                    var ultCy = y0 + iconSz / 2;
+                    var sumCy = y0 + iconSz + gap + iconSz / 2;
+                    var ultSuffix = skillUltSkillSuffix(hid);
+                    var ultAltSuffix = (ultSuffix === '30') ? '40' : '30';
+                    var ultCacheKey = 'm_ult_' + hid + '_' + ultSuffix + '_' + ultAltSuffix;
+                    var ultImg = getCachedMobileSkillIcon(ultCacheKey, skillUltUrlChain(hid));
+                    drawSkillIcon(ultImg, colCx, ultCy, iconSz, ultCD);
+                    var sid = Number(summonerSkillId);
+                    var sidChain = getSummonerIconIdChain(sid);
+                    var sidChainKey = sidChain.length ? sidChain.join('_') : String(sid);
+                    var sumImg = getCachedMobileSkillIcon('m_sum_' + sidChainKey, getSummonerIconUrlChain(sid));
+                    drawSkillIcon(sumImg, colCx, sumCy, iconSz, summoner1CD);
+                } else if (hasUlt) {
+                    var ultCy2 = y + height / 2;
+                    var ultSuffix2 = skillUltSkillSuffix(hid);
+                    var ultAltSuffix2 = (ultSuffix2 === '30') ? '40' : '30';
+                    var ultCacheKey2 = 'm_ult_' + hid + '_' + ultSuffix2 + '_' + ultAltSuffix2;
+                    var ultImg2 = getCachedMobileSkillIcon(ultCacheKey2, skillUltUrlChain(hid));
+                    drawSkillIcon(ultImg2, colCx, ultCy2, iconSz, ultCD);
+                } else if (hasSum) {
+                    var sumCy2 = y + height / 2;
+                    var sid2 = Number(summonerSkillId);
+                    var sid2Chain = getSummonerIconIdChain(sid2);
+                    var sid2ChainKey = sid2Chain.length ? sid2Chain.join('_') : String(sid2);
+                    var sumImg2 = getCachedMobileSkillIcon('m_sum_' + sid2ChainKey, getSummonerIconUrlChain(sid2));
+                    drawSkillIcon(sumImg2, colCx, sumCy2, iconSz, summoner1CD);
+                }
+            } catch (e) {
+                console.error('绘制移动端头像技能图标时出错:', e);
+            }
+        }
+
+        var heroNameMapPromise = null;
+        function ensureHeroNameMap(done) {
+            if (window.__heroNameById) {
+                done();
+                return;
+            }
+            if (!heroNameMapPromise) {
+                function parseHeroNameMap(arr) {
+                    var m = {};
+                    if (Array.isArray(arr)) {
+                        for (var i = 0; i < arr.length; i++) {
+                            var h = arr[i];
+                            if (h && h.ename != null && h.cname) {
+                                m[String(h.ename)] = h.cname;
+                            }
+                        }
+                    }
+                    return m;
+                }
+                heroNameMapPromise = fetch('api/index.php?module=hero_list&_=' + Date.now(), { cache: 'no-store' })
+                    .then(function(r) {
+                        if (!r.ok) throw new Error('api hero_list not ok');
+                        return r.json();
+                    })
+                    .then(function(payload) {
+                        if (payload && Number(payload.code) === 0 && Array.isArray(payload.data)) {
+                            return payload.data;
+                        }
+                        throw new Error('api hero_list payload invalid');
+                    })
+                    .catch(function() {
+                        return fetch('herolist.json', { cache: 'force-cache' })
+                            .then(function(r2) {
+                                if (!r2.ok) throw new Error('local herolist not ok');
+                                return r2.json();
+                            });
+                    })
+                    .then(function(arr) {
+                        window.__heroNameById = parseHeroNameMap(arr);
+                    })
+                    .catch(function() {
+                        window.__heroNameById = {};
+                    });
+            }
+            heroNameMapPromise.then(function() { done(); });
+        }
+
+        // 本地兜底英雄名映射（不依赖外网/跨域），优先用于技能侧面板显示。
+        var HERO_NAME_FALLBACK = {
+            '105': '廉颇', '106': '小乔', '107': '赵云', '108': '墨子', '109': '妲己',
+            '110': '嬴政', '111': '孙尚香', '112': '鲁班七号', '113': '庄周', '114': '刘禅',
+            '115': '高渐离', '116': '阿轲', '117': '钟无艳', '118': '孙膑', '119': '扁鹊',
+            '120': '白起', '121': '芈月', '123': '吕布', '124': '周瑜', '125': '元歌',
+            '126': '夏侯惇', '127': '甄姬', '128': '曹操', '129': '典韦', '130': '宫本武藏',
+            '131': '李白', '133': '狄仁杰', '134': '达摩', '135': '项羽', '136': '武则天',
+            '137': '司马懿', '139': '老夫子', '140': '关羽', '141': '貂蝉', '142': '安琪拉',
+            '144': '程咬金', '146': '露娜', '148': '姜子牙', '149': '刘邦', '150': '韩信',
+            '152': '王昭君', '153': '兰陵王', '154': '花木兰', '155': '艾琳', '156': '张良',
+            '157': '不知火舞', '162': '娜可露露', '163': '橘右京', '166': '亚瑟', '167': '孙悟空',
+            '168': '牛魔', '169': '后羿', '170': '刘备', '171': '张飞', '173': '李元芳',
+            '174': '虞姬', '175': '钟馗', '176': '杨玉环', '177': '成吉思汗', '178': '杨戬',
+            '179': '女娲', '180': '哪吒', '183': '雅典娜', '184': '蔡文姬', '186': '太乙真人',
+            '187': '东皇太一', '189': '鬼谷子', '190': '诸葛亮', '191': '大乔', '192': '黄忠',
+            '193': '铠', '194': '苏烈', '195': '百里玄策', '196': '百里守约', '197': '梦奇',
+            '198': '梦奇', '199': '公孙离', '312': '沈梦溪', '501': '明世隐', '502': '裴擒虎',
+            '503': '狂铁', '504': '米莱狄', '505': '瑶', '506': '云中君', '507': '李信',
+            '508': '伽罗', '509': '盾山', '510': '孙策', '511': '猪八戒', '513': '上官婉儿',
+            '515': '嫦娥', '517': '大司命', '518': '马超', '519': '敖隐', '521': '海诺',
+            '522': '曜', '523': '西施', '524': '蒙犽',
+            '525': '鲁班大师', '527': '蒙恬', '528': '澜', '529': '盘古', '531': '镜',
+            '533': '阿古朵', '534': '夏洛特', '536': '司空震', '537': '艾琳', '538': '云缨',
+            '540': '金蝉', '542': '暃', '544': '桑启', '545': '海月', '548': '戈娅',
+            '550': '莱西奥', '563': '海诺', '564': '姬小满', '577': '少司缘',
+            '581': '元流之子(坦克)', '582': '元流之子(法师)', '583': '元流之子(刺客)',
+            '584': '元流之子(射手)', '585': '元流之子(辅助)', '159': '朵莉亚', '631': '影'
+        };
+
+        function getHeroDisplayName(heroId) {
+            var id = String(heroId);
+            try {
+                if (window.__HERO_NAME_OVERRIDES && window.__HERO_NAME_OVERRIDES[id]) {
+                    return String(window.__HERO_NAME_OVERRIDES[id]);
+                }
+            } catch (e) {}
+            var m = window.__heroNameById;
+            if (m && m[id]) return m[id];
+            if (HERO_NAME_FALLBACK[id]) return HERO_NAME_FALLBACK[id];
+            return '英雄 #' + id;
+        }
+
+        // rw[7] 在不同房间协议里可能是血量(0-100)或死亡倒计时秒数(>100 常见)。
+        function parseHeroLifeState(rawHpLike) {
+            var out = { hpPercent: undefined, isDead: false, deathCD: undefined };
+            var n = Number(rawHpLike);
+            if (isNaN(n)) return out;
+            if (n > 100 && n <= 300) {
+                out.isDead = true;
+                out.deathCD = n;
+                return out;
+            }
+            if (n <= 0) {
+                out.isDead = true;
+                out.hpPercent = 0;
+                return out;
+            }
+            out.hpPercent = Math.max(0, Math.min(100, n));
+            return out;
+        }
+
+        /** 与 processGameData 内一致的召唤师 CD 提取（供可选 __SUMMONER_CD_FALLBACK_ID 兜底使用） */
+        function getSummonerCdFromRw(rw) {
+            if (!rw || !rw.length) return undefined;
+            function cdAt(idx) {
+                if (idx < 0 || idx >= rw.length) return undefined;
+                var v = Number(rw[idx]);
+                if (isNaN(v) || v < 0 || v > 180) return undefined;
+                return v;
+            }
+            var s1Main = cdAt(4);
+            if (s1Main !== undefined) return s1Main;
+            if (cdAt(9) !== undefined) return cdAt(9);
+            if (cdAt(10) !== undefined) return cdAt(10);
+            if (cdAt(11) !== undefined) return cdAt(11);
+            if (cdAt(12) !== undefined) return cdAt(12);
+            return undefined;
+        }
+
+        /** 从 rw 解析召唤师资源 ID 列表（按优先级），与本地 skill/{id}.png 一致；80001–81999。 */
+        function parseSummonerSkillIdsFromRw(rw) {
+            if (!rw || !rw.length) return undefined;
+            function inSummonIdRange(n) {
+                return !isNaN(n) && n >= 80001 && n <= 81999;
+            }
+            function tryField(v) {
+                if (v === undefined || v === null || v === '') return [];
+                var s0 = String(v).trim();
+                var parts = s0.split(/[,|;:\/@\s\x00]+/);
+                var out = [];
+                for (var pi = 0; pi < parts.length; pi++) {
+                    var tok = parts[pi].trim();
+                    if (!tok) continue;
+                    if (tok.indexOf('.') >= 0) continue;
+                    var n = Number(tok);
+                    if (inSummonIdRange(n)) {
+                        out.push(Math.round(n));
+                        continue;
+                    }
+                    if (/[eE][+-]?\d/.test(tok)) continue;
+                    var m = tok.match(/\b(80\d{3})\b/);
+                    if (m) {
+                        var n2 = Number(m[1]);
+                        if (inSummonIdRange(n2)) out.push(n2);
+                    }
+                }
+                return out;
+            }
+            var list = [];
+            function pushId(n) {
+                if (n === undefined || n === null) return;
+                var num = Number(n);
+                if (isNaN(num)) return;
+                for (var i0 = 0; i0 < list.length; i0++) {
+                    if (list[i0] === num) return;
+                }
+                list.push(num);
+            }
+            function pushMany(arr) {
+                if (!arr || !arr.length) return;
+                for (var i1 = 0; i1 < arr.length; i1++) pushId(arr[i1]);
+            }
+            pushMany(tryField(rw[4]));
+            for (var i = 9; i < rw.length; i++) {
+                pushMany(tryField(rw[i]));
+            }
+            for (var j = 0; j < rw.length; j++) {
+                if (j === 3 || j === 4 || j === 5 || j === 6 || j >= 9) continue;
+                pushMany(tryField(rw[j]));
+            }
+            for (var p = 5; p <= 6; p++) {
+                if (p < rw.length) {
+                    pushMany(tryField(rw[p]));
+                }
+            }
+            for (var ri = rw.length - 1; ri >= 0; ri--) {
+                if (ri === 3) continue;
+                pushMany(tryField(rw[ri]));
+            }
+            // 兜底：直接从 rw 全量字符串提取 80xxx（部分房间 rw 字段格式更“散”，导致前面 tryField 找不到）
+            try {
+                var joined = rw.join(' ');
+                var mAll = joined.match(/80\d{3}/g);
+                if (mAll && mAll.length) {
+                    for (var mi = 0; mi < mAll.length; mi++) {
+                        var cand = Number(mAll[mi]);
+                        if (inSummonIdRange(cand)) pushId(cand);
+                    }
+                }
+            } catch (e) { /* ignore */ }
+            return list;
+        }
+        function parseSummonerSkillIdFromRw(rw) {
+            var ids = parseSummonerSkillIdsFromRw(rw);
+            if (!ids || !ids.length) return undefined;
+            // 若同一帧同时出现惩击两形态，优先取升级态图标
+            for (var i = 0; i < ids.length; i++) {
+                if (ids[i] === 80116) return 80116;
+            }
+            return ids[0];
+        }
+
+        /**
+         * 召唤师资源 ID：优先 rw 解析。部分房间/对局只传 CD、不传技能 ID，可兜底：
+         *   window.__SUMMONER_CD_FALLBACK_ID 单个，或
+         *   window.__SUMMONER_CD_FALLBACK_IDS [80101,80106,...]（按顺序取第一个合法数字，填你 skill 文件夹里「惩击」对应的 png 名）
+         * 关闭兜底：window.__DISABLE_SUMMONER_CD_FALLBACK 或 __DISABLE_SMITE_CD_FALLBACK
+         */
+        function resolveSummonerSkillIdForHero(rw, summoner1CD) {
+            var id = parseSummonerSkillIdFromRw(rw);
+            if (id !== undefined) return id;
+            if (window.__DISABLE_SUMMONER_CD_FALLBACK || window.__DISABLE_SMITE_CD_FALLBACK) return undefined;
+            var cd = summoner1CD;
+            if (cd === undefined || cd === null || (typeof cd === 'number' && isNaN(cd))) {
+                cd = getSummonerCdFromRw(rw);
+            }
+            if (cd === undefined || cd === null) return undefined;
+            var sc = Number(cd);
+            if (isNaN(sc) || sc < 0 || sc > 180) return undefined;
+
+            var fb = window.__SUMMONER_CD_FALLBACK_ID;
+            if (fb !== undefined && fb !== null && String(fb).trim() !== '') {
+                var nfb = Number(fb);
+                if (!isNaN(nfb)) return nfb;
+            }
+            var list = window.__SUMMONER_CD_FALLBACK_IDS;
+            if (Array.isArray(list) && list.length > 0) {
+                for (var li = 0; li < list.length; li++) {
+                    var cand = Number(list[li]);
+                    if (!isNaN(cand) && cand >= 80001 && cand <= 81999) return cand;
+                }
+            }
+            return undefined;
+        }
+
+        function updateHeroSkillPanel(heroes) {
+            var root = document.getElementById('heroSkillListRoot');
+            if (!root) return;
+
+            function buildSkillRow(label, cd, heroId, kind, summonerSkillId) {
+                var row = document.createElement('div');
+                row.className = 'hero-skill-item';
+                var left = document.createElement('div');
+                left.className = 'hero-skill-left';
+                var iconEl;
+                var hid = String(heroId);
+                if (kind === 'ult') {
+                    iconEl = document.createElement('img');
+                    iconEl.className = 'hero-skill-icon';
+                    iconEl.loading = 'lazy';
+                    iconEl.alt = '大招';
+                    (function() {
+                        var chain = skillUltUrlChain(hid);
+                        var ci = 0;
+                        iconEl.src = chain[0] || '';
+                        iconEl.onerror = function() {
+                            ci++;
+                            if (ci < chain.length) {
+                                this.src = chain[ci];
+                            } else {
+                                this.onerror = null;
+                            }
+                        };
+                    })();
+                } else {
+                    var sid = summonerSkillId;
+                    var hasSid = sid !== undefined && sid !== null && !isNaN(Number(sid));
+                    if (hasSid) {
+                        sid = Number(sid);
+                        iconEl = document.createElement('img');
+                        iconEl.className = 'hero-skill-icon';
+                        iconEl.loading = 'lazy';
+                        iconEl.alt = label;
+                        var sidUrls = getSummonerIconUrlChain(sid);
+                        var sidIdx = 0;
+                        iconEl.src = sidUrls[0] || '';
+                        iconEl.onerror = function() {
+                            sidIdx++;
+                            if (sidIdx < sidUrls.length) {
+                                this.src = sidUrls[sidIdx];
+                            } else {
+                                this.onerror = null;
+                            }
+                        };
+                    } else {
+                        // 兜底：有召唤师CD但未上报技能ID时，不要猜测具体技能，用通用占位图标
+                        var cdNum = Number(cd);
+                        var hasCd = cd !== undefined && cd !== null && !isNaN(cdNum);
+                        if (hasCd) {
+                            iconEl = document.createElement('img');
+                            iconEl.className = 'hero-skill-icon';
+                            iconEl.loading = 'lazy';
+                            iconEl.alt = label;
+                            // 使用简洁的内置 SVG，占位但不误导
+                            iconEl.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
+                                "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'>"
+                                + "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
+                                + "<stop offset='0' stop-color='#334155'/><stop offset='1' stop-color='#0f172a'/>"
+                                + "</linearGradient></defs>"
+                                + "<rect x='0' y='0' width='64' height='64' rx='12' fill='url(#g)'/>"
+                                + "<path d='M32 12c8.8 0 16 7.2 16 16 0 10.3-10.3 19.6-15.1 23.4a1.6 1.6 0 0 1-1.9 0C26.3 47.6 16 38.3 16 28c0-8.8 7.2-16 16-16Z' fill='rgba(148,163,184,0.35)'/>"
+                                + "<path d='M28 20l10 6-10 6v-4h-6v-4h6v-4Z' fill='rgba(219,234,254,0.85)'/>"
+                                + "</svg>"
+                            );
+                        } else {
+                            iconEl = document.createElement('span');
+                            iconEl.className = 'hero-skill-icon hero-skill-icon--blank';
+                            iconEl.title = '未上报召唤师技能 ID';
+                        }
+                    }
+                }
+                var lab = document.createElement('span');
+                lab.className = 'hero-skill-name';
+                lab.textContent = label;
+                var val = document.createElement('span');
+                val.className = 'hero-skill-value';
+                if (cd === undefined || cd === null) {
+                    val.textContent = '--';
+                } else {
+                    var n = Number(cd);
+                    if (isNaN(n)) {
+                        val.textContent = '--';
+                    } else if (n <= 0) {
+                        val.textContent = '';
+                    } else {
+                        row.classList.add('hero-skill-row--cooling');
+                        iconEl.classList.add('hero-skill-icon--dim');
+                        val.textContent = Math.ceil(n) + 's';
+                    }
+                }
+                left.appendChild(iconEl);
+                left.appendChild(lab);
+                row.appendChild(left);
+                row.appendChild(val);
+                return row;
+            }
+
+            function render() {
+                root.innerHTML = '';
+                if (!heroes || heroes.length === 0) {
+                    var empty = document.createElement('div');
+                    empty.className = 'hero-skill-empty';
+                    empty.textContent = '暂无英雄数据';
+                    root.appendChild(empty);
+                    return;
+                }
+                for (var i = 0; i < heroes.length; i++) {
+                    var h = heroes[i];
+                    var block = document.createElement('div');
+                    block.className = 'hero-skill-block';
+                    var deadCdNum = Number(h.deathCD);
+                    var hasDeathCd = !isNaN(deadCdNum) && deadCdNum > 0;
+                    var isDead = !!h.isDead || hasDeathCd;
+                    if (isDead) block.classList.add('hero-skill-block--dead');
+
+                    var head = document.createElement('div');
+                    head.className = 'hero-skill-block-head';
+                    var img = document.createElement('img');
+                    img.className = 'hero-skill-mini-avatar';
+                    if (isDead) img.classList.add('hero-skill-mini-avatar--dead');
+                    img.alt = '';
+                    img.loading = 'lazy';
+                    (function(el, hid) {
+                        var base = 'https://game.gtimg.cn/images/yxzj/img201606/heroimg/' + encodeURIComponent(hid) + '/' + encodeURIComponent(hid);
+                        var jpg = base + '.jpg';
+                        var png = base + '.png';
+                        var st = 0;
+                        el.onerror = function() {
+                            if (st === 0) {
+                                st = 1;
+                                el.src = png;
+                                return;
+                            }
+                            if (st === 1) {
+                                st = 2;
+                                el.src = jpg + (jpg.indexOf('?') === -1 ? '?' : '&') + '_retry=' + Date.now();
+                                return;
+                            }
+                            el.onerror = null;
+                            el.src = HERO_AVATAR_PLACEHOLDER;
+                            el.style.opacity = '0.35';
+                        };
+                        el.src = jpg;
+                    })(img, h.heroId);
+
+                    var headText = document.createElement('div');
+                    headText.className = 'hero-skill-block-head-text';
+                    var title = document.createElement('div');
+                    title.className = 'hero-skill-block-title';
+                    title.textContent = getHeroDisplayName(h.heroId) + (isDead ? ' 阵亡' : '');
+
+                    var meta = document.createElement('div');
+                    meta.className = 'hero-skill-block-meta';
+                    var zyText = (Number(h.zy) === 1) ? '蓝方' : '红方';
+                    // “阵亡”只显示在英雄名称后面，这里仅显示阵营、ID 与（若有）倒计时秒数
+                    meta.textContent = zyText + ' · ID ' + h.heroId + (hasDeathCd ? (' · ' + Math.ceil(deadCdNum) + 's') : '');
+
+                    headText.appendChild(title);
+                    headText.appendChild(meta);
+                    head.appendChild(img);
+                    head.appendChild(headText);
+                    block.appendChild(head);
+
+                    var rows = document.createElement('div');
+                    rows.className = 'hero-skill-block-rows';
+                    rows.appendChild(buildSkillRow('大招', h.ultCD, h.heroId, 'ult'));
+                    rows.appendChild(buildSkillRow(getSummonerSkillDisplayName(h.summonerSkillId), h.summoner1CD, h.heroId, 'summoner', h.summonerSkillId));
+                    block.appendChild(rows);
+                    root.appendChild(block);
+                }
+            }
+
+            render();
+            ensureHeroNameMap(function() { render(); });
+            ensureSummonerNameMap(function() { render(); });
+        }
+        
+        /** 头像下方三个圆点：大、召唤师1、召唤师2。绿=就绪，橙=冷却中，灰=无数据 */
+        function drawCooldownDotsBelowAvatar(x, y, width, height, ultCD, skillCD, summoner1CD, summoner2CD) {
+            try {
+                var sMin = Math.min(scaleX, scaleY);
+                var dotR = Math.max(3 * sMin, 2.5);
+                var gap = 3 * sMin;
+                var offsetY = 3 * sMin;
+                var cy = y + height + offsetY + dotR;
+                var cx = x + width / 2;
+                var spacing = 2 * dotR + gap;
+                var x0 = cx - spacing;
+                var x1 = cx;
+                var x2 = cx + spacing;
+                
+                var ready = '#22c55e';
+                var cooling = '#f97316';
+                var unknown = '#64748b';
+                
+                var u = Number(ultCD);
+                if (isNaN(u)) u = 0;
+                var c0 = u > 0 ? cooling : ready;
+                
+                var s1Known = false;
+                var s1Val = 0;
+                if (summoner1CD !== undefined && summoner1CD !== null && !isNaN(Number(summoner1CD))) {
+                    s1Val = Number(summoner1CD);
+                    s1Known = true;
+                }
+                var c1 = s1Known ? (s1Val > 0 ? cooling : ready) : unknown;
+                
+                var s2Known = summoner2CD !== undefined && summoner2CD !== null && !isNaN(Number(summoner2CD));
+                var s2Val = s2Known ? Number(summoner2CD) : 0;
+                var c2 = s2Known ? (s2Val > 0 ? cooling : ready) : unknown;
+                
+                context.save();
+                var pts = [ { px: x0, c: c0 }, { px: x1, c: c1 }, { px: x2, c: c2 } ];
+                for (var i = 0; i < pts.length; i++) {
+                    context.beginPath();
+                    context.arc(pts[i].px, cy, dotR, 0, Math.PI * 2);
+                    context.fillStyle = pts[i].c;
+                    context.fill();
+                    context.strokeStyle = 'rgba(0,0,0,0.4)';
+                    context.lineWidth = Math.max(1, sMin * 0.35);
+                    context.stroke();
+                }
+                context.restore();
+            } catch (e) {
+                console.error('绘制头像下方CD圆点时出错:', e);
+            }
+        }
+        
+        // 绘制英雄等级（在头像右上角）
+        function drawHeroLevel(x, y, width, height, level, zy) {
+            try {
+                level = Number(level);
+                if(isNaN(level) || level <= 0) {
+                    return;
+                }
+                
+                var fontSize = Math.max(10 * Math.min(scaleX, scaleY), 9);
+                var levelText = 'Lv.' + level;
+                var padding = 3 * Math.min(scaleX, scaleY);
+                // 阵营判断：1=蓝方，其他=红方（确保zy是数字类型）
+                var bgColor = (zy === 1 || zy === '1') ? 'rgba(74, 158, 255, 0.9)' : 'rgba(255, 68, 68, 0.9)';
+                var textColor = '#ffffff';
+                
+                context.save();
+                context.font = 'bold ' + fontSize + 'px Arial';
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                
+                // 测量文字宽度
+                var textWidth = context.measureText(levelText).width;
+                var bgWidth = textWidth + padding * 2;
+                var bgHeight = fontSize + padding;
+                
+                // 等级显示在头像右上角
+                var levelX = x + width - bgWidth / 2 - 2 * Math.min(scaleX, scaleY);
+                var levelY = y + bgHeight / 2 + 2 * Math.min(scaleX, scaleY);
+                
+                // 绘制背景（圆角矩形）
+                var bgX = levelX - bgWidth / 2;
+                var bgY = levelY - bgHeight / 2;
+                var radius = 3 * Math.min(scaleX, scaleY);
+                
+                context.fillStyle = bgColor;
+                context.beginPath();
+                context.moveTo(bgX + radius, bgY);
+                context.lineTo(bgX + bgWidth - radius, bgY);
+                context.quadraticCurveTo(bgX + bgWidth, bgY, bgX + bgWidth, bgY + radius);
+                context.lineTo(bgX + bgWidth, bgY + bgHeight - radius);
+                context.quadraticCurveTo(bgX + bgWidth, bgY + bgHeight, bgX + bgWidth - radius, bgY + bgHeight);
+                context.lineTo(bgX + radius, bgY + bgHeight);
+                context.quadraticCurveTo(bgX, bgY + bgHeight, bgX, bgY + bgHeight - radius);
+                context.lineTo(bgX, bgY + radius);
+                context.quadraticCurveTo(bgX, bgY, bgX + radius, bgY);
+                context.closePath();
+                context.fill();
+                
+                // 绘制文字
+                context.fillStyle = textColor;
+                context.fillText(levelText, levelX, levelY);
+                
+                context.restore();
+            } catch(e) {
+                console.error("绘制英雄等级时出错:", e);
+            }
+        }
+        
+        // 绘制CD时间文字（在绿色和黄色圆圈里）
+        function drawCDTimesInCircles(x, y, width, height, ultCD, skillCD, summoner1CD, summoner2CD, zy) {
+            try {
+                // 注意：这里的x, y, width, height已经是缩放后的坐标和尺寸
+                ultCD = Number(ultCD);
+                if(isNaN(ultCD)) {
+                    ultCD = 0;
+                }
+                
+                // 圆圈参数（与drawImageAtPosition中的保持一致）
+                var circleRadius = 8 * Math.min(scaleX, scaleY); // 改小圆圈
+                var greenCircleX = x + circleRadius + 2;
+                var greenCircleY = y + height - circleRadius - 2;
+                var yellowCircleX = x + width - circleRadius - 2;
+                var yellowCircleY = y + height - circleRadius - 2;
+                
+                // 字体大小（适配改小的圆圈）
+                var fontSize = Math.max(8 * Math.min(scaleX, scaleY), 7);
+                
+                context.save();
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                context.font = 'bold ' + fontSize + 'px Arial';
+                
+                // 在绿色圆圈里显示"大"的CD（左下角）
+                // 冷却中：显示倒计时数字；就绪：不再显示对勾，直接留空
+                var ultText = '';
+                if(ultCD > 0) {
+                    ultText = Math.ceil(ultCD).toString(); // 冷却中，直接显示倒计时数字
+                }
+                if (ultText) {
+                    // 绿色圆圈上用白色文字，更清晰
+                    context.fillStyle = '#ffffff';
+                    context.fillText(ultText, greenCircleX, greenCircleY);
+                }
+                
+                // 在黄色圆圈里显示第一个召唤师技能CD（右下角）
+                // 仅使用 summoner1CD，避免把血量等字段误当成技能CD
+                var s1ForText = NaN;
+                if (summoner1CD !== undefined && summoner1CD !== null && !isNaN(Number(summoner1CD))) {
+                    s1ForText = Number(summoner1CD);
+                }
+                if (!isNaN(s1ForText) && s1ForText > 0) {
+                    context.fillStyle = '#000000';
+                    context.fillText(Math.ceil(s1ForText).toString(), yellowCircleX, yellowCircleY);
+                }
+                
+                context.restore();
+            } catch(e) {
+                console.error("绘制CD时间时出错:", e);
+            }
+        }
+        
+        function drawHP(x, y, hp, zy) {
+            try {
+                // 坐标转换（与drawImageAtPosition保持一致）
+                var originalX = gameCoordOffX + Number(x) * gameCoordScale;
+                var originalY = gameCoordOffY + Number(y) * gameCoordScale;
+                
+                // 头像尺寸（与drawImageAtPosition保持一致）
+                const avatarWidth = 40 * gameCoordScale;
+                const avatarHeight = 40 * gameCoordScale;
+                
+                hp = Number(hp);
+                zy = Number(zy);
+                
+                // 验证数据有效性
+                if(isNaN(originalX) || isNaN(originalY) || isNaN(hp) || hp < 0 || hp > 100) {
+                    return; // 无效数据，跳过绘制
+                }
+
+                // 环形血条参数：围绕头像外圈
+                const sMin = gameCoordScale;
+                const centerX = originalX + avatarWidth / 2;
+                const centerY = originalY + avatarHeight / 2;
+                const avatarRadius = Math.max(avatarWidth, avatarHeight) / 2 - 2;
+                const ringWidth = Math.max(3 * sMin, 2);
+                const ringRadius = avatarRadius + ringWidth * 0.9;
+
+                // 阵营判断：1=蓝方，其他=红方（确保zy是数字类型）
+                var hpColor = (zy === 1 || zy === '1') ? 蓝方血条颜色 : 红方血条颜色;
+
+                // 先画一圈背景环
+                context.save();
+                context.beginPath();
+                context.arc(centerX, centerY, ringRadius, 0, Math.PI * 2);
+                context.strokeStyle = 血条背景颜色;
+                context.lineWidth = ringWidth;
+                context.lineCap = 'round';
+                context.stroke();
+
+                // 再画当前血量环（从顶部开始，顺时针）
+                var startAngle = -Math.PI / 2;
+                var endAngle = startAngle + (Math.PI * 2 * (hp / 100));
+                if (hp > 0) {
+                    context.beginPath();
+                    context.arc(centerX, centerY, ringRadius, startAngle, endAngle, false);
+                    context.strokeStyle = hpColor;
+                    context.lineWidth = ringWidth;
+                    context.lineCap = 'round';
+                    context.stroke();
+                }
+                context.restore();
+            } catch(e) {
+                console.error("绘制血条时出错:", e, "x:", x, "y:", y, "hp:", hp, "zy:", zy);
+            }
+        }
+        
+        function 绘制防御塔(x, y, hp, zy , width, height) {
+            return;
+        }
+
+        function extractIpFromRoomName(roomName) {
+            if(!roomName) return null;
+            // 提取 IPv4 地址
+            var match = roomName.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
+            return match ? match[1] : null;
+        }
+
+        function buildRoomLabel(buttonName) {
+            var label = buttonName;
+            try {
+                var ip = extractIpFromRoomName(buttonName);
+                if(ip && ipUsernameCache[ip]) {
+                    label = buttonName + ' (' + ipUsernameCache[ip] + ')';
+                }
+            } catch(e) {}
+            return label;
+        }
+
+        function fetchUsernameForIp(ip) {
+            if(!ip || ipUsernameCache[ip]) return;
+            // 先占位为空字符串，防止并发重复请求
+            ipUsernameCache[ip] = ipUsernameCache[ip] || null;
+            fetch('api/index.php?module=ip_username&ip=' + encodeURIComponent(ip), {
+                credentials: 'include',
+                cache: 'no-store'
+            }).then(function(r){ return r.json(); }).then(function(res){
+                if(res && res.code === 0 && res.data && res.data.username) {
+                    ipUsernameCache[ip] = res.data.username;
+                    // 更新当前列表中对应 IP 的显示
+                    try {
+                        if(homeList) {
+                            var items = homeList.querySelectorAll('.list-item');
+                            items.forEach(function(item){
+                                var roomName = item.getAttribute('data-room-name') || item.textContent.trim();
+                                var itemIp = extractIpFromRoomName(roomName);
+                                if(itemIp === ip) {
+                                    item.textContent = buildRoomLabel(roomName);
+                                }
+                            });
+                        }
+                    } catch(e) {}
+                }
+            }).catch(function(){});
+        }
+
+        function normalizeGameServerAddress(host, port) {
+            host = (host || '').trim();
+            if (!host) return '';
+            host = host.replace(/^wss?:\/\//i, '').replace(/\/.*$/, '').replace(/\/$/, '');
+            if (host.indexOf(':') === -1) {
+                host += ':' + (port || 8888);
+            }
+            return host;
+        }
+
+        function getGameServerProtocol() {
+            return getWebSocketProtocol();
+        }
+
+        function getDefaultGameServers() {
+            return [{ id: 'default', name: '本服务器', host: defaultGameServer, port: 8888 }];
+        }
+
+        function serverDisplayName(server) {
+            if (!server) return '服务器';
+            if (server.host === defaultGameServer || normalizeGameServerAddress(server.host, server.port) === defaultGameServer) return '本服务器';
+            var name = String(server.name || '').trim();
+            if (name && !/^\d{1,3}(?:\.\d{1,3}){3}(:\d+)?$/.test(name)) return name;
+            return '服务器';
+        }
+
+        function escapeJsString(value) {
+            return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
+        }
+
+        function renderCombinedRoomList() {
+            var rooms = [];
+            var seenRooms = {};
+            gameServers.forEach(function(server) {
+                var serverHost = normalizeGameServerAddress(server.host, server.port);
+                var list = roomListByServer[serverHost] || [];
+                list.forEach(function(room) {
+                    if (!room) return;
+                    seenRooms[room] = (seenRooms[room] || 0) + 1;
+                    rooms.push({ room: room, serverHost: serverHost, serverName: serverDisplayName(server) });
+                });
+            });
+            rooms.sort(function(a, b) {
+                return String(a.room || '').localeCompare(String(b.room || ''), 'zh-Hans-CN', { numeric: true });
+            });
+
+            cache.roomList = rooms.map(function(item) { return item.room; });
+            updateHeaderStats(cache.roomList);
+            var roomTotalCountEl = document.getElementById('roomTotalCount');
+            if (roomTotalCountEl) roomTotalCountEl.textContent = rooms.length + ' 间';
+
+            if (!homeList) return;
+            if (!rooms.length) {
+                homeList.innerHTML = '<div class="list-item" style="cursor: default;">暂无房间</div>';
+                return;
+            }
+
+            var listHtml = '';
+            rooms.forEach(function(item) {
+                var listClass = 'list-item';
+                if (item.room === homeId && item.serverHost === activeGameServer) listClass += ' active';
+                var label = buildRoomLabel(item.room);
+                if (seenRooms[item.room] > 1) label += ' - ' + item.serverName;
+                listHtml += '<div onclick="buttonClicked(\'' + escapeJsString(item.room) + '\', \'' + escapeJsString(item.serverHost) + '\');" class="' + listClass + '" data-room-name="' + escapeJsString(item.room) + '" data-server-host="' + escapeJsString(item.serverHost) + '">' + label.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+                var roomIp = extractIpFromRoomName(item.room);
+                if (roomIp && !ipUsernameCache[roomIp]) fetchUsernameForIp(roomIp);
+            });
+            homeList.innerHTML = listHtml;
+        }
+
+        function updateRoomsForServer(serverHost, roomList) {
+            serverHost = normalizeGameServerAddress(serverHost || activeGameServer || defaultGameServer, 8888);
+            roomListByServer[serverHost] = Array.isArray(roomList) ? roomList : [];
+            renderCombinedRoomList();
+        }
+
+        function openRoomListSocket(server) {
+            var serverHost = normalizeGameServerAddress(server.host, server.port);
+            if (!serverHost || !window.WebSocket) return;
+            if (serverHost === activeGameServer) return;
+            if (roomSocketFailedUntil[serverHost] && Date.now() < roomSocketFailedUntil[serverHost]) return;
+            try {
+                if (roomListSockets[serverHost]) {
+                    roomListSockets[serverHost].onclose = null;
+                    roomListSockets[serverHost].close();
+                }
+                if (roomListTimers[serverHost]) clearInterval(roomListTimers[serverHost]);
+                var ws = new WebSocket(getGameServerProtocol() + serverHost + '/ws');
+                roomListSockets[serverHost] = ws;
+                ws.onopen = function() {
+                    roomSocketActiveCount = Math.max(0, roomSocketActiveCount - 1);
+                    scheduleRoomSocketQueue();
+                    ws.send('getHome');
+                    roomListTimers[serverHost] = setInterval(function() {
+                        if (document.hidden) return;
+                        if (ws.readyState === WebSocket.OPEN) ws.send('getHome');
+                    }, 3000);
+                };
+                ws.onmessage = function(event) {
+                    var datas = String(event.data || '').split('##');
+                    if (datas[0] !== 'homeData') return;
+                    var roomData = datas[1] || '';
+                    var rooms = roomData ? roomData.split(',').filter(function(room) { return room && room.trim() !== ''; }) : [];
+                    updateRoomsForServer(serverHost, rooms);
+                };
+                ws.onclose = function() {
+                    roomSocketActiveCount = Math.max(0, roomSocketActiveCount - 1);
+                    scheduleRoomSocketQueue();
+                    if (roomListTimers[serverHost]) clearInterval(roomListTimers[serverHost]);
+                };
+                ws.onerror = function() {
+                    roomSocketFailedUntil[serverHost] = Date.now() + 5 * 60 * 1000;
+                    updateRoomsForServer(serverHost, roomListByServer[serverHost] || []);
+                };
+            } catch (e) {
+                console.warn('房间列表服务器连接失败');
+            }
+        }
+
+        function startRoomListSockets() {
+            Object.keys(roomListSockets).forEach(function(serverHost) {
+                try {
+                    roomListSockets[serverHost].onclose = null;
+                    roomListSockets[serverHost].close();
+                } catch (e) {}
+            });
+            Object.keys(roomListTimers).forEach(function(serverHost) {
+                clearInterval(roomListTimers[serverHost]);
+            });
+            roomSocketStartTimers.forEach(function(timer) {
+                clearTimeout(timer);
+            });
+            if (roomSocketQueueTimer) clearTimeout(roomSocketQueueTimer);
+            roomSocketStartTimers = [];
+            roomSocketQueue = [];
+            roomSocketQueueTimer = null;
+            roomSocketActiveCount = 0;
+            roomListSockets = {};
+            roomListTimers = {};
+            roomListByServer = {};
+            roomSocketQueue = gameServers.filter(function(server) {
+                var host = normalizeGameServerAddress(server.host, server.port);
+                return host && host !== activeGameServer;
+            });
+            scheduleRoomSocketQueue();
+        }
+
+        function scheduleRoomSocketQueue() {
+            if (roomSocketQueueTimer) return;
+            roomSocketQueueTimer = setTimeout(function() {
+                roomSocketQueueTimer = null;
+                pumpRoomSocketQueue();
+            }, document.hidden ? 5000 : 2000);
+        }
+
+        function pumpRoomSocketQueue() {
+            if (document.hidden) {
+                scheduleRoomSocketQueue();
+                return;
+            }
+            while (roomSocketActiveCount < roomSocketMaxActive && roomSocketQueue.length) {
+                var server = roomSocketQueue.shift();
+                var host = normalizeGameServerAddress(server.host, server.port);
+                if (!host || roomListSockets[host]) continue;
+                if (roomSocketFailedUntil[host] && Date.now() < roomSocketFailedUntil[host]) continue;
+                roomSocketActiveCount++;
+                openRoomListSocket(server);
+            }
+            if (roomSocketQueue.length) scheduleRoomSocketQueue();
+        }
+
+        function loadGameServersForFront() {
+            fetch('/api/index.php?module=game_servers&action=public', { credentials: 'include', cache: 'no-store' })
+                .then(function(resp) { return resp.json(); })
+                .then(function(res) {
+                    var list = res && res.data && Array.isArray(res.data.list) ? res.data.list : [];
+                    var mapped = (res && res.code === 0 && list.length) ? list : [];
+                    mapped = mapped.map(function(server) {
+                        return {
+                            id: server.id,
+                            name: server.name || '',
+                            host: normalizeGameServerAddress(server.host, server.port),
+                            port: server.port || 8888,
+                            last_check_status: server.last_check_status || '',
+                            last_check_at: server.last_check_at || ''
+                        };
+                    }).filter(function(server) {
+                        return !!server.host;
+                    });
+                    var defaults = getDefaultGameServers();
+                    var seen = {};
+                    gameServers = [];
+                    defaults.concat(mapped).forEach(function(server, index) {
+                        var host = normalizeGameServerAddress(server.host, server.port);
+                        if (!host || seen[host]) return;
+                        seen[host] = true;
+                        gameServers.push({
+                            id: server.id || ('server-' + index),
+                            name: server.name || (host === defaultGameServer ? '本服务器' : ('服务器' + index)),
+                            host: host,
+                            port: server.port || 8888
+                        });
+                    });
+                    gameServers.sort(function(a, b) {
+                        if (a.host === defaultGameServer) return -1;
+                        if (b.host === defaultGameServer) return 1;
+                        return 0;
+                    });
+                    if (!gameServers.length) gameServers = getDefaultGameServers();
+                    startRoomListSockets();
+                })
+                .catch(function() {
+                    gameServers = getDefaultGameServers();
+                    startRoomListSockets();
+                });
+        }
+
+        function setupWebSocketHandlers() {
+            if(!socket) return;
+            
+            socket.onmessage = function (event) {
+                 try {
+                     var datas = event.data.split("##");
+                     if(datas.length < 2) {
+                         console.warn("收到格式异常的消息:", event.data.substring(0, 100));
+                         return;
+                     }
+                     // 移除频繁的日志输出以提高性能
+                    // console.log("收到消息类型:", datas[0], "数据长度:", datas[1] ? datas[1].length : 0);
+                     if("homeData"===datas[0]){
+                    try {
+                        var roomData = datas[1];
+                        var roomList = [];
+                        if(roomData && roomData.trim() !== "") {
+                            roomList = roomData.split(",").filter(room => room && room.trim() !== "");
+                        }
+                        saveToCache('roomList', roomList);
+                        cache.roomList = roomList;
+                        updateRoomsForServer(activeGameServer, roomList);
+                        lastRoomListData = roomList.slice();
+                        lastRoomListUpdate = performance.now();
+                        if(homeText) {
+                            homeText.textContent = homeId === '' ? (connectionState === 'connected' ? '未连接房间' : '未连接') : ('已连接: ' + homeId);
+                        }
+                        if (homeId && roomList.indexOf(homeId) === -1 && findServerForRoom(homeId) === '') {
+                            disconnectRoom();
+                            showError('房间不存在或已关闭: ' + homeId, 3000);
+                        }
+                        return;
+                        
+                        // 检测当前连接的房间是否还在列表中（房间已关闭检测）
+                        if(homeId && homeId !== '') {
+                            var roomExists = roomList.some(function(room) {
+                                return room === homeId;
+                            });
+                            
+                            // 如果当前连接的房间不在列表中，说明房间已关闭，自动断开
+                            if(!roomExists) {
+                                console.log("检测到房间已关闭，自动断开连接:", homeId);
+                                disconnectRoom();
+                                showError("房间 " + homeId + " 已关闭，已自动断开连接", 3000);
+                            }
+                        }
+                        
+                        // 更新房间列表（优化：只在数据变化时更新，减少跳动）
+                        var now = performance.now();
+                        var shouldUpdate = false;
+                        
+                        // 检查数据是否变化
+                        if(!lastRoomListData || lastRoomListData.length !== roomList.length) {
+                            shouldUpdate = true;
+                        } else {
+                            // 比较房间列表内容
+                            for(var i = 0; i < roomList.length; i++) {
+                                if(lastRoomListData[i] !== roomList[i]) {
+                                    shouldUpdate = true;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // 节流控制：限制更新频率
+                        if(shouldUpdate && (now - lastRoomListUpdate >= roomListUpdateThrottle)) {
+                            var listHtml='';
+                            if(roomList.length > 0){
+                                roomList.forEach((buttonName,index) => {
+                                    var listClass = 'list-item';
+                                    if(buttonName == homeId) {
+                                        listClass += ' active';
+                                    }
+                                    var safeRoomName = buttonName.replace(/'/g, "&#39;").replace(/"/g, "&quot;");
+                                    var safeRoomNameForAttr = buttonName.replace(/'/g, "\\'").replace(/"/g, '\\"');
+                                    var label = buildRoomLabel(buttonName);
+                                    var safeLabel = label.replace(/'/g, "&#39;").replace(/"/g, "&quot;");
+                                    listHtml+='<div onclick="buttonClicked(\''+safeRoomNameForAttr+'\');" class="'+listClass+'" data-room-name="'+safeRoomNameForAttr+'">'+safeLabel+'</div>';
+                                    // 异步拉取该房间对应 IP 的用户名（如果能从房间名中解析出 IP）
+                                    var ip = extractIpFromRoomName(buttonName);
+                                    if(ip && !ipUsernameCache[ip]) {
+                                        fetchUsernameForIp(ip);
+                                    }
+                                });
+                            }else{
+                                 listHtml+='<div class="list-item" style="cursor: default;">暂时没人开启共享</div>';
+                            }
+                            if(homeList) {
+                                homeList.innerHTML = listHtml;
+                            }
+                            
+                            // 保存当前数据用于下次比较
+                            lastRoomListData = roomList.slice(); // 创建副本
+                            lastRoomListUpdate = now;
+                        } else if(shouldUpdate) {
+                            // 数据变化但需要节流，只更新active状态（不重新渲染整个列表）
+                            if(homeList && lastRoomListData && lastRoomListData.length === roomList.length) {
+                                var items = homeList.querySelectorAll('.list-item');
+                                for(var i = 0; i < items.length && i < roomList.length; i++) {
+                                    if(roomList[i] == homeId) {
+                                        items[i].classList.add('active');
+                                    } else {
+                                        items[i].classList.remove('active');
+                                    }
+                                }
+                            }
+                        }
+                        // 更新头部在线统计
+                        updateHeaderStats(cache.roomList || roomList);
+                        
+                        if(homeText) {
+                            // 更新房间号显示，确保显示当前连接状态
+                            if(homeId === '') {
+                                homeText.textContent = connectionState === 'connected' ? '未连接房间' : '未连接';
+                            } else {
+                                homeText.textContent = '已连接: ' + homeId;
+                            }
+                        }
+                    } catch(e) {
+                        var errorMsg = "解析房间列表失败: " + e.message;
+                        showError(errorMsg);
+                        console.error("处理房间列表数据时出错:", e);
+                        var cachedRooms = getFromCache('roomList');
+                        if(cachedRooms && cachedRooms.length > 0) {
+                            showSuccess("已加载缓存的房间列表");
+                        }
+                    }
+                 }else if("gameData"===datas[0]){
+                    try {
+                        var rawGd = datas[1];
+                        wsLastGameDataReceiveAt = Date.now();
+                        var stampMs = extractGameDataStampMs(rawGd);
+                        // 去掉末尾时间戳后缀再绘制，避免破坏 --- 分段协议
+                        pendingGameData = stripGameDataTimelineSuffix(rawGd);
+                        var nowTick = Date.now();
+                        if (stampMs !== null) {
+                            var lag = nowTick - stampMs;
+                            if (lag >= 0 && lag < 120000) {
+                                if (wsSharerLatencyEma === null) wsSharerLatencyEma = lag;
+                                else wsSharerLatencyEma = wsSharerLatencyEma * 0.65 + lag * 0.35;
+                            }
+                        } else if (wsLastSendAt > 0) {
+                            var sample = nowTick - wsLastSendAt;
+                            if (sample > 0 && sample < 20000) {
+                                if (wsLatencyEma === null) wsLatencyEma = sample;
+                                else wsLatencyEma = wsLatencyEma * 0.65 + sample * 0.35;
+                            }
+                        }
+                        updateWsQualityHud();
+                        // 不在这里直接绘制，由gameLoop统一调度
+                    } catch(e) {
+                        var errorMsg = "接收游戏数据失败: " + e.message;
+                        showError(errorMsg);
+                        console.error("接收游戏数据时出错:", e);
+                    }
+                 }
+                 } catch(e) {
+                     var errorMsg = "处理服务器消息失败: " + (e.message || "未知错误");
+                     showError(errorMsg);
+                     console.error("处理服务器消息时出错:", e);
+                 }
+            }
+            
+            socket.onerror = function (event) {
+                // 清除连接超时定时器
+                if(connectionTimeout) {
+                    clearTimeout(connectionTimeout);
+                    connectionTimeout = null;
+                }
+                
+                updateConnectionStatus('error', '连接失败');
+                var wsProtocol = getWebSocketProtocol();
+                var cleanIP = ip ? ip.trim().replace(/\/$/, '') : '未配置';
+                var wsUrl = wsProtocol + cleanIP + "/ws";
+                
+                // 根据错误类型提供更详细的错误信息
+                var errorMsg = "无法连接到服务器: " + wsUrl;
+                errorMsg += "\n可能的原因：";
+                errorMsg += "\n1. WebSocket服务器未运行";
+                errorMsg += "\n2. 端口8888未开放或被防火墙阻止";
+                errorMsg += "\n3. 服务器地址或端口不正确";
+                errorMsg += "\n4. 网络连接问题";
+                
+                if(reconnectAttempts >= maxReconnectAttempts) {
+                    errorMsg += "\n(持续重连中...)";
+                } else {
+                    errorMsg += "\n(正在重试第 " + reconnectAttempts + " 次)";
+                }
+                
+                showError(errorMsg);
+                console.error("WebSocket错误:", event);
+                console.error("连接URL已隐藏");
+                console.error("错误详情:", {
+                    readyState: socket ? socket.readyState : 'socket为null',
+                    url: 'hidden',
+                    protocol: wsProtocol
+                });
+            }
+
+            socket.onopen = function(event){
+                // 清除连接超时定时器
+                if(connectionTimeout) {
+                    clearTimeout(connectionTimeout);
+                    connectionTimeout = null;
+                }
+                if (animationFrameId !== null) {
+                    cancelAnimationFrame(animationFrameId);
+                    animationFrameId = null;
+                }
+                radarGameLoopRef = null;
+                isDrawing = false;
+                
+                reconnectAttempts = 0;
+                wsLastSendAt = 0;
+                wsLastGameDataRequestAt = 0;
+                wsLastGameDataReceiveAt = Date.now();
+                wsLatencyEma = null;
+                wsSharerLatencyEma = null;
+                if (wsHasEverConnected) {
+                    wsLifetimeReconnects++;
+                }
+                wsHasEverConnected = true;
+                updateConnectionStatus('connected', '');
+                updateWsQualityHud();
+                showSuccess("已成功连接到服务器", 3000);
+                console.log("WebSocket连接成功");
+                
+                // 更新头部状态指示器
+                var headerIndicator = document.getElementById('headerStatusIndicator');
+                if (headerIndicator) {
+                    headerIndicator.classList.remove('disconnected');
+                }
+                
+                intervalIds.forEach(id => clearInterval(id));
+                intervalIds = [];
+                
+                getHome();
+                if (pendingRoomId && (!pendingRoomServer || pendingRoomServer === activeGameServer)) {
+                    var roomToOpen = pendingRoomId;
+                    pendingRoomId = '';
+                    pendingRoomServer = '';
+                    buttonClicked(roomToOpen, activeGameServer);
+                }
+                intervalIds.push(setInterval(getHome, 1000));
+                // 分享token模式下禁用在线人数拉取（避免额外 HTTP 并发影响共享传输稳定性）
+                if (!__shareTokenMode) {
+                    // 定期从后端获取在线人数
+                    fetchOnlineUserCount();
+                    intervalIds.push(setInterval(fetchOnlineUserCount, 5000));
+                }
+                intervalIds.push(setInterval(getGameData, gameDataTime));
+                // 游戏循环：拉数由 setInterval(gameDataTime) 负责（约 50Hz），此处只做 rAF 绘制与侧边栏刷新
+                let lastHeroUpdate = 0;
+                
+                function gameLoop(currentTime) {
+                    // 处理待绘制的游戏数据；必须用 finally，否则 processGameData 抛错时 isDrawing 永远为 true → 雷达卡死
+                    if (pendingGameData && !isDrawing) {
+                        isDrawing = true;
+                        try {
+                            processGameData(pendingGameData);
+                            lastDrawTime = currentTime;
+                        } catch (loopErr) {
+                            console.error('gameLoop 绘制异常:', loopErr);
+                        } finally {
+                            pendingGameData = null;
+                            isDrawing = false;
+                        }
+                    }
+                    
+                    // 500ms更新一次canvas旋转
+                    if (currentTime - lastHeroUpdate >= 500) {
+                        刷新英雄信息();
+                        lastHeroUpdate = currentTime;
+                    }
+                    
+                    if (socket && socket.readyState === WebSocket.OPEN) {
+                        animationFrameId = requestAnimationFrame(gameLoop);
+                    } else {
+                        animationFrameId = null;
+                    }
+                }
+                radarGameLoopRef = gameLoop;
+                animationFrameId = requestAnimationFrame(gameLoop);
+                // 英雄信息现在直接显示在canvas上，不需要定时更新侧边栏
+                
+                var cachedRooms = getFromCache('roomList');
+                if(cachedRooms && cachedRooms.length > 0) {
+                    console.log("从缓存加载房间列表");
+                    cache.roomList = cachedRooms;
+                    updateHeaderStats(cachedRooms);
+                }
+            }
+
+            socket.onclose = function (event) {
+                // 清除连接超时定时器
+                if(connectionTimeout) {
+                    clearTimeout(connectionTimeout);
+                    connectionTimeout = null;
+                }
+                __heroPosSmooth = Object.create(null);
+                wsLastSendAt = 0;
+                wsLastGameDataRequestAt = 0;
+                wsLastGameDataReceiveAt = 0;
+                wsLatencyEma = null;
+                wsSharerLatencyEma = null;
+                
+                intervalIds.forEach(id => clearInterval(id));
+                intervalIds = [];
+                if (animationFrameId !== null) {
+                    cancelAnimationFrame(animationFrameId);
+                    animationFrameId = null;
+                }
+                radarGameLoopRef = null;
+                isDrawing = false;
+                
+                updateConnectionStatus('disconnected', '');
+                
+                // 根据关闭代码提供更详细的错误信息
+                var closeReason = "未知原因";
+                switch(event.code) {
+                    case 1000:
+                        closeReason = "正常关闭";
+                        break;
+                    case 1001:
+                        closeReason = "端点离开（服务器关闭或浏览器导航）";
+                        break;
+                    case 1002:
+                        closeReason = "协议错误";
+                        break;
+                    case 1003:
+                        closeReason = "数据类型错误";
+                        break;
+                    case 1006:
+                        closeReason = "异常关闭（连接未正常关闭，可能是服务器未运行或网络问题）";
+                        break;
+                    case 1007:
+                        closeReason = "数据格式错误";
+                        break;
+                    case 1008:
+                        closeReason = "策略违规";
+                        break;
+                    case 1009:
+                        closeReason = "消息过大";
+                        break;
+                    case 1010:
+                        closeReason = "扩展协商失败";
+                        break;
+                    case 1011:
+                        closeReason = "服务器内部错误";
+                        break;
+                    case 1015:
+                        closeReason = "TLS握手失败";
+                        break;
+                    default:
+                        closeReason = "未知错误代码: " + event.code;
+                }
+                
+                console.log("WebSocket连接已关闭，代码:", event.code, "原因:", event.reason || closeReason);
+                
+                // 如果是异常关闭（1006），提供更详细的诊断信息
+                if(event.code === 1006) {
+                    console.error("连接异常关闭诊断：");
+                    console.error("  - 服务器地址已隐藏");
+                    console.error("  - 连接URL已隐藏");
+                    console.error("  - 可能原因: 1)服务器未运行 2)端口未开放 3)防火墙阻止 4)网络不通");
+                }
+                
+                if(event.code !== 1000 && reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    updateConnectionStatus('connecting', '正在重连 (第' + reconnectAttempts + '次)');
+                    showError("连接断开，正在尝试重连 (第" + reconnectAttempts + "次)...", 3000);
+                    
+                    if(reconnectTimer) {
+                        clearTimeout(reconnectTimer);
+                    }
+                    
+                    var delay = Math.min(3000 * Math.pow(1.5, Math.min(reconnectAttempts, 10)), 60000);
+                    reconnectTimer = setTimeout(function() {
+                        // 先关闭旧连接（如果存在且不是已关闭状态）
+                        if(socket) {
+                            try {
+                                if(socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+                                    socket.onclose = null; // 移除旧的关闭事件处理器，避免重复触发
+                                    socket.close();
+                                }
+                            } catch(e) {
+                                console.warn("关闭旧连接时出错:", e);
+                            }
+                            socket = null;
+                        }
+                        
+                        // 检查IP是否有效
+                        if (!ip || ip.trim() === '') {
+                            showError("服务器IP未配置，无法重连", 5000);
+                            return;
+                        }
+                        
+                        console.log("尝试重新连接 (第" + reconnectAttempts + "次)...");
+                        try {
+                            var wsProtocol = getWebSocketProtocol();
+                            // 确保IP格式正确（移除可能的斜杠）
+                            var cleanIP = ip.trim().replace(/\/$/, '');
+                            var wsUrl = wsProtocol + cleanIP + "/ws";
+                            console.log("正在重连WebSocket");
+                            socket = new WebSocket(wsUrl);
+                            setupWebSocketHandlers();
+                        } catch(e) {
+                            console.error("重连失败:", e);
+                            showError("重连失败: " + e.message);
+                            // 如果重连失败，继续尝试（直到达到最大次数）
+                            if(reconnectAttempts < maxReconnectAttempts) {
+                                reconnectAttempts++;
+                                updateConnectionStatus('connecting', '正在重连 (第' + reconnectAttempts + '次)');
+                            }
+                        }
+                    }, delay);
+                } else if(reconnectAttempts >= maxReconnectAttempts) {
+                    updateConnectionStatus('connecting', '持续重连中...');
+                    reconnectAttempts = 0;
+                    initWebSocket();
+                }
+            }
+        }
+        
+        function initWebSocket() {
+            // 检查IP是否已配置
+            if (!ip || ip.trim() === '') {
+                updateConnectionStatus('error', '服务器IP未配置');
+                showError("服务器IP未配置，请在代码中配置服务器地址", 0);
+                return;
+            }
+            
+            // 如果已有连接，先关闭它
+            if(socket) {
+                try {
+                    if(socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+                        socket.onclose = null; // 移除旧的关闭事件处理器，避免触发重连
+                        socket.close();
+                    }
+                } catch(e) {
+                    console.warn("关闭旧连接时出错:", e);
+                }
+                socket = null;
+            }
+            
+            if(window.WebSocket){
+                var wsProtocol = getWebSocketProtocol();
+                updateConnectionStatus('connecting', '');
+                try {
+                    // 确保IP格式正确（移除可能的斜杠）
+                    var cleanIP = ip.trim().replace(/\/$/, '');
+                    var wsUrl = wsProtocol + cleanIP + "/ws";
+                    console.log("正在连接WebSocket");
+                    
+                    // 清除之前的连接超时定时器
+                    if(connectionTimeout) {
+                        clearTimeout(connectionTimeout);
+                        connectionTimeout = null;
+                    }
+                    
+                    socket = new WebSocket(wsUrl);
+                    
+                    // 设置连接超时（10秒）
+                    connectionTimeout = setTimeout(function() {
+                        if(socket && socket.readyState !== WebSocket.OPEN) {
+                            console.error("WebSocket连接超时（10秒）");
+                            showError("连接超时：无法在10秒内连接到服务器。请检查：1)服务器是否运行 2)端口8888是否开放 3)防火墙设置", 10000);
+                            updateConnectionStatus('error', '连接超时');
+                            try {
+                                socket.close();
+                            } catch(e) {
+                                console.warn("关闭超时连接时出错:", e);
+                            }
+                            socket = null;
+                            
+                            // 如果未达到最大重连次数，触发重连
+                            if(reconnectAttempts < maxReconnectAttempts) {
+                                reconnectAttempts++;
+                                var delay = Math.min(3000 * Math.pow(1.5, Math.min(reconnectAttempts, 10)), 60000);
+                                reconnectTimer = setTimeout(function() {
+                                    initWebSocket();
+                                }, delay);
+                            }
+                        }
+                    }, 10000);
+                    
+                    setupWebSocketHandlers();
+                } catch(e) {
+                    updateConnectionStatus('error', '连接失败');
+                    showError("无法建立WebSocket连接: " + e.message);
+                    console.error("WebSocket连接失败:", e);
+                    if(connectionTimeout) {
+                        clearTimeout(connectionTimeout);
+                        connectionTimeout = null;
+                    }
+                }
+            }else{
+                updateConnectionStatus('error', '不支持');
+                showError("您的浏览器不支持WebSocket，请使用现代浏览器（Chrome、Firefox、Edge等）");
+                if(homeText) {
+                    homeText.textContent="浏览器不支持WebSocket";
+                }
+            }
+        }
+
+        function send(message){
+            if(!window.WebSocket){
+                return;
+            }
+            if(!socket) {
+                console.warn("WebSocket未初始化");
+                return;
+            }
+            if(socket.readyState == WebSocket.OPEN){
+                try {
+                    socket.send(message);
+                    // 移除频繁日志以提高性能
+                } catch(e) {
+                    var errorMsg = "发送消息失败: " + e.message;
+                    showError(errorMsg);
+                    console.error("发送消息失败:", e);
+                }
+            }else{
+                var stateMsg = "连接状态异常";
+                if(socket.readyState === WebSocket.CONNECTING) {
+                    stateMsg = "正在连接中，请稍候...";
+                } else if(socket.readyState === WebSocket.CLOSING) {
+                    stateMsg = "连接正在关闭...";
+                } else if(socket.readyState === WebSocket.CLOSED) {
+                    stateMsg = "连接已断开";
+                }
+                showError(stateMsg);
+                console.warn("无法发送消息，WebSocket状态:", socket.readyState);
+            }
+        }
+        
+        function getHome() {
+            send("getHome");
+        }
+
+        // 上报房间号到后端，用于关联 IP -> 房间 -> 用户
+        function reportRoomToBackend(roomId) {
+            if (!roomId) return;
+            try {
+                fetch('/api/index.php?module=room_report', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ room: roomId }),
+                    keepalive: true,
+                    cache: 'no-store'
+                }).catch(function(e) {
+                    console.warn('上报房间失败:', e);
+                });
+            } catch (e) {
+                console.warn('上报房间异常:', e);
+            }
+        }
+
+        function getGameData() {
+            if(""!=homeId && socket && socket.readyState === WebSocket.OPEN){
+                wsLastSendAt = Date.now();
+                wsLastGameDataRequestAt = wsLastSendAt;
+                send("web"+webPullTimestamp+"[==]"+homeId);
+                // 同步把当前房间上报给后端（限流，避免与 WS 拉数同频发 HTTP 导致长时间卡顿/白屏）
+                // 分享token模式下禁止 room_report（避免共享启动瞬间的额外写入/解析导致后端异常退出）
+                if (!__shareTokenMode) {
+                    var now = Date.now();
+                    if (now - lastRoomReportTime >= ROOM_REPORT_INTERVAL_MS) {
+                        lastRoomReportTime = now;
+                        reportRoomToBackend(homeId);
+                    }
+                }
+            }
+            // 移除警告日志以提高性能
+        }
+        
+        function buttonClicked(buttonText, serverHost) {
+            if(buttonText && buttonText.trim() !== "") {
+                serverHost = normalizeGameServerAddress(serverHost || activeGameServer || defaultGameServer, 8888);
+                if (serverHost && serverHost !== activeGameServer) {
+                    pendingRoomServer = serverHost;
+                    pendingRoomId = buttonText.trim();
+                    activeGameServer = serverHost;
+                    ip = serverHost;
+                    initWebSocket();
+                    return;
+                }
+                // 切换房间时清空视觉状态，避免残留旧房间帧/英雄
+                resetRoomVisualState();
+                homeId = buttonText.trim();
+                webPullTimestamp = Date.now();
+                lastRoomReportTime = 0;
+                console.log("连接到房间");
+                showSuccess("正在连接到房间: " + homeId, 2000);
+                if(homeText) {
+                    homeText.textContent = "已连接: " + homeId;
+                }
+                
+                // 更新列表项的active状态（避免重新渲染整个列表，减少跳动）
+                if(homeList) {
+                    var items = homeList.querySelectorAll('.list-item');
+                    items.forEach(function(item) {
+                        var roomName = item.getAttribute('data-room-name') || item.textContent.trim();
+                        var itemServer = item.getAttribute('data-server-host') || activeGameServer;
+                        if(roomName === homeId && itemServer === activeGameServer) {
+                            item.classList.add('active');
+                        } else {
+                            item.classList.remove('active');
+                        }
+                    });
+                }
+                
+                // 立即请求游戏数据（内部会顺便上报房间号给后端）
+                if(socket && socket.readyState === WebSocket.OPEN) {
+                    getGameData();
+                } else {
+                    showError("WebSocket未连接，请等待连接建立");
+                }
+            } else {
+                showError("房间名称无效");
+            }
+        }
+        
+        function disconnectRoom() {
+            homeId = "";
+            resetRoomVisualState();
+            console.log("已断开房间连接");
+            showSuccess("已断开房间连接", 2000);
+            if(homeText) {
+                homeText.textContent = connectionState === 'connected' ? '未连接房间' : '未连接';
+            }
+            
+            // 移除所有列表项的active状态（避免重新渲染整个列表）
+            if(homeList) {
+                var items = homeList.querySelectorAll('.list-item');
+                items.forEach(function(item) {
+                    item.classList.remove('active');
+                });
+            }
+        }
+
+        function findServerForRoom(roomId) {
+            roomId = String(roomId || '').trim();
+            if (!roomId) return '';
+            var found = '';
+            Object.keys(roomListByServer || {}).some(function(serverHost) {
+                var rooms = roomListByServer[serverHost] || [];
+                if (rooms.indexOf(roomId) !== -1) {
+                    found = serverHost;
+                    return true;
+                }
+                return false;
+            });
+            return found;
+        }
+
+        function getKnownRoomCount() {
+            var total = 0;
+            Object.keys(roomListByServer || {}).forEach(function(serverHost) {
+                var rooms = roomListByServer[serverHost] || [];
+                total += rooms.length;
+            });
+            return total;
+        }
+
+        function connectManualRoom() {
+            var input = document.getElementById('manualRoomInput');
+            var roomId = input && input.value ? input.value.trim() : '';
+            if (!roomId) {
+                showError('请输入房间号');
+                return;
+            }
+            var serverHost = findServerForRoom(roomId);
+            if (!serverHost && /^[0-9]+$/.test(roomId)) {
+                var paddedRoomId = roomId.padStart(6, '0');
+                serverHost = findServerForRoom(paddedRoomId);
+                if (serverHost) roomId = paddedRoomId;
+            }
+            if (!serverHost) {
+                if (getKnownRoomCount() > 0) {
+                    showError('房间不存在或已关闭: ' + roomId);
+                } else {
+                    showError('房间列表还没加载，请先刷新房间');
+                }
+                return;
+            }
+            buttonClicked(roomId, serverHost);
+        }
+
+        function initManualRoomConnect() {
+            var input = document.getElementById('manualRoomInput');
+            var btn = document.getElementById('btnManualRoomConnect');
+            if (btn) btn.onclick = connectManualRoom;
+            if (input) {
+                input.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter') connectManualRoom();
+                });
+            }
+        }
+        
+        function loadCachedData() {
+            try {
+                var cachedRooms = getFromCache('roomList');
+                if(cachedRooms && cachedRooms.length > 0) {
+                    console.log("从缓存恢复房间列表:", cachedRooms.length + "个房间");
+                    cache.roomList = cachedRooms;
+                    updateHeaderStats(cachedRooms);
+                }
+                var cachedHeroInfo = getFromCache('heroInfo');
+                if(cachedHeroInfo && cachedHeroInfo.length > 0) {
+                    console.log("从缓存恢复英雄信息:", cachedHeroInfo.length + "个英雄");
+                    英雄信息 = cachedHeroInfo;
+                }
+            } catch(e) {
+                console.warn("加载缓存数据失败:", e);
+            }
+        }
+
+        function initCollapsiblePanel(toggleId, contentId, iconId) {
+            var toggle = document.getElementById(toggleId);
+            var content = document.getElementById(contentId);
+            var icon = document.getElementById(iconId);
+            if (toggle && content) {
+                toggle.addEventListener('click', function() {
+                    content.hidden = !content.hidden;
+                    var open = !content.hidden;
+                    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+                    if (icon) icon.textContent = open ? '▼' : '▶';
+                });
+            }
+        }
+
+        function initUserInfoPanelCollapse() {
+            initCollapsiblePanel('userInfoToggle', 'userInfoContent', 'userInfoIcon');
+        }
+
+        function initHeroSkillPanelCollapse() {
+            initCollapsiblePanel('heroSkillToggle', 'heroSkillContent', 'heroSkillIcon');
+        }
+        
+        window.addEventListener('DOMContentLoaded', function() {
+            loadCachedData();
+            setTimeout(loadGameServersForFront, 300);
+            initManualRoomConnect();
+            initUserInfoPanelCollapse();
+            initHeroSkillPanelCollapse();
+            initCollapsiblePanel('roomListToggle', 'roomListContent', 'roomListIcon');
+            initCollapsiblePanel('shareLinkToggle', 'shareLinkContent', 'shareLinkIcon');
+            initCollapsiblePanel('mapCalibToggle', 'mapCalibContent', 'mapCalibIcon');
+            initMapCalibrationPanel();
+            initCollapsiblePanel('qqGroupToggle', 'qqGroupContent', 'qqGroupIcon');
+
+            // 英雄、兵线、野怪子折叠面板（互斥展开）
+            function initOffsetPanel(toggleId, contentId, iconId) {
+                var toggle = document.getElementById(toggleId);
+                var content = document.getElementById(contentId);
+                var icon = document.getElementById(iconId);
+                if (!toggle || !content) return;
+
+                toggle.addEventListener('click', function() {
+                    var willOpen = content.hidden;
+                    // 如果要展开，先收起其他两个
+                    if (willOpen) {
+                        var allContents = ['heroOffsetContent', 'minionOffsetContent', 'monsterOffsetContent'];
+                        var allIcons = ['heroOffsetIcon', 'minionOffsetIcon', 'monsterOffsetIcon'];
+                        var allToggles = ['heroOffsetToggle', 'minionOffsetToggle', 'monsterOffsetToggle'];
+
+                        allContents.forEach(function(cId, idx) {
+                            if (cId !== contentId) {
+                                var c = document.getElementById(cId);
+                                var i = document.getElementById(allIcons[idx]);
+                                var t = document.getElementById(allToggles[idx]);
+                                if (c) c.hidden = true;
+                                if (i) i.textContent = '▶';
+                                if (t) t.setAttribute('aria-expanded', 'false');
+                            }
+                        });
+                    }
+
+                    // 切换当前面板
+                    content.hidden = !willOpen;
+                    toggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+                    if (icon) icon.textContent = willOpen ? '▼' : '▶';
+                });
+            }
+
+            initOffsetPanel('heroOffsetToggle', 'heroOffsetContent', 'heroOffsetIcon');
+            initOffsetPanel('minionOffsetToggle', 'minionOffsetContent', 'minionOffsetIcon');
+            initOffsetPanel('monsterOffsetToggle', 'monsterOffsetContent', 'monsterOffsetIcon');
+
+            // 侧边栏切换功能（固定在右侧的按钮）
+            var toggleSidebarBtn = document.getElementById('toggleSidebarBtn');
+            var container = document.querySelector('.container');
+            if (toggleSidebarBtn && container) {
+                // 点击切换侧边栏
+                var isDragging = false;
+                var startY = 0;
+                var startTop = 0;
+
+                toggleSidebarBtn.addEventListener('mousedown', function(e) {
+                    isDragging = true;
+                    startY = e.clientY;
+                    startTop = parseInt(toggleSidebarBtn.style.top || '0');
+                    toggleSidebarBtn.classList.add('dragging');
+                    e.preventDefault();
+                });
+
+                document.addEventListener('mousemove', function(e) {
+                    if (!isDragging) return;
+                    var deltaY = e.clientY - startY;
+                    var newTop = startTop + deltaY;
+                    // 限制拖动范围
+                    newTop = Math.max(0, Math.min(window.innerHeight - 70, newTop));
+                    toggleSidebarBtn.style.top = newTop + 'px';
+                });
+
+                document.addEventListener('mouseup', function() {
+                    if (isDragging) {
+                        isDragging = false;
+                        toggleSidebarBtn.classList.remove('dragging');
+                    }
+                });
+
+                // 单击切换侧边栏（如果拖动距离很小则视为点击）
+                var mouseDownTime = 0;
+                toggleSidebarBtn.addEventListener('mousedown', function(e) {
+                    mouseDownTime = Date.now();
+                });
+
+                toggleSidebarBtn.addEventListener('click', function(e) {
+                    var mouseUpTime = Date.now();
+                    // 如果按下和抬起时间差小于200ms，认为是点击，不是拖动
+                    if (mouseUpTime - mouseDownTime < 200) {
+                        container.classList.toggle('sidebar-hidden');
+                        var isHidden = container.classList.contains('sidebar-hidden');
+                        toggleSidebarBtn.textContent = isHidden ? '显示侧边栏' : '隐藏侧边栏';
+                        if (isHidden) {
+                            toggleSidebarBtn.classList.add('show-sidebar');
+                        } else {
+                            toggleSidebarBtn.classList.remove('show-sidebar');
+                        }
+                        updateCanvasSize();
+                    }
+                });
+            }
+        });
+        
+        function setHomeId(){
+            if(homeIdInput && homeIdInput.value) {
+                resetRoomVisualState();
+                homeId = homeIdInput.value.trim();
+                webPullTimestamp = Date.now();
+                lastRoomReportTime = 0;
+                console.log("设置房间ID");
+                if(homeId) {
+                    showSuccess("正在连接到房间: " + homeId, 2000);
+                    if(homeText) {
+                        homeText.textContent = "已连接: " + homeId;
+                    }
+                    // 立即请求游戏数据
+                    if(socket && socket.readyState === WebSocket.OPEN) {
+                        getGameData();
+                    } else {
+                        showError("WebSocket未连接，请等待连接建立");
+                    }
+                } else {
+                    showError("房间名称不能为空");
+                }
+            } else {
+                showError("请输入房间名称");
+                console.warn("房间ID输入为空");
+            }
+        }
+        
+        function 刷新英雄信息(){
+            try {
+                if(canvas_game) {
+                    canvas_game.className=mapImageRotate==1?"rotate180":"rotate0";
+                }
+                // 英雄信息现在直接显示在canvas上，不需要更新侧边栏
+            } catch(e) {
+                console.error("刷新英雄信息时出错:", e);
+            }
+        }
+
+        function sendClientOnlineHeartbeat(){
+            try {
+                fetch('api/index.php?module=client_online_heartbeat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ client: 'web' })
+                }).catch(function(){});
+            } catch(e) {}
+        }
+        sendClientOnlineHeartbeat();
+        setInterval(sendClientOnlineHeartbeat, 30000);
+    </script>
+</body>
+</html>
