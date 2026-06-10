@@ -1041,7 +1041,7 @@ function renderAdminPage() {
         '<th>时间</th><th>版本</th><th>前台</th><th>SSH</th><th>后台</th><th>数据库</th><th>APP</th><th>备注</th><th>操作</th>' +
         '</tr></thead><tbody>' + records.map((r, i) => {
           const ssh = (r.ssh || {}), site = (r.site || {}), backend = (r.backend || {}), db = (r.database || {}), app = (r.app || {});
-          const notes = Array.isArray(r.notes) ? r.notes.join('\n') : '';
+          const notes = Array.isArray(r.notes) ? r.notes.join(String.fromCharCode(10)) : '';
           return '<tr>' +
             '<td>'+esc(fmtTime(r.createdAt))+'</td>' +
             '<td>'+esc(r.modeLabel || r.mode || '')+'</td>' +
