@@ -20,7 +20,7 @@
 全部搭建成功
 ```
 
-## 一键命令：Gitee 公共仓库
+## 一键搭建命令：Gitee
 
 在云服务器 SSH 窗口执行：
 
@@ -30,31 +30,25 @@ curl -fsSL https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-install.sh 
 
 脚本启动后会让你输入安装授权码、后台账号、数据库密码等信息。
 
-## 一键命令：Gitee 私有仓库
-
-如果仓库是私有的，先在 Gitee 创建私人令牌，然后执行：
-
-```bash
-read -rp "Gitee用户名: " GIT_USERNAME
-read -rsp "Gitee私人令牌: " GIT_TOKEN; echo
-export GIT_USERNAME GIT_TOKEN
-bash -c 'set -e; command -v git >/dev/null 2>&1 || (command -v apt-get >/dev/null 2>&1 && apt-get update && apt-get install -y git ca-certificates) || (command -v yum >/dev/null 2>&1 && yum install -y git ca-certificates); rm -rf /tmp/wzry-space-installer; git clone --depth 1 --branch main "https://${GIT_USERNAME}:${GIT_TOKEN}@gitee.com/hl515/wzry-space.git" /tmp/wzry-space-installer; bash /tmp/wzry-space-installer/scripts/cloud-install.sh --source gitee'
-```
-
-## 一键命令：GitHub 公共仓库
+## 一键搭建命令：GitHub
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/a534686350/wzry-space/main/scripts/cloud-install.sh -o /tmp/wzry-install.sh && bash /tmp/wzry-install.sh --source github
 ```
 
-## 一键命令：GitHub 私有仓库
+## SSH 远程更新源码
 
-如果仓库是私有的，先创建 GitHub Token，然后执行：
+以后发了新版本，服务器 SSH 里执行下面命令即可更新源码、前台、后台、APK、数据库升级 SQL，并重载服务：
+
+Gitee 更新：
+```bash
+curl -fsSL https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh && bash /tmp/wzry-update.sh
+```
+
+GitHub 更新：
 
 ```bash
-read -rsp "GitHub Token: " GITHUB_TOKEN; echo
-export GITHUB_TOKEN
-bash -c 'set -e; command -v git >/dev/null 2>&1 || (command -v apt-get >/dev/null 2>&1 && apt-get update && apt-get install -y git ca-certificates) || (command -v yum >/dev/null 2>&1 && yum install -y git ca-certificates); rm -rf /tmp/wzry-space-installer; git clone --depth 1 --branch main "https://x-access-token:${GITHUB_TOKEN}@github.com/a534686350/wzry-space.git" /tmp/wzry-space-installer; bash /tmp/wzry-space-installer/scripts/cloud-install.sh --source github'
+curl -fsSL https://raw.githubusercontent.com/a534686350/wzry-space/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh && bash /tmp/wzry-update.sh --source github
 ```
 
 ## 安装过程中会问什么
@@ -157,15 +151,21 @@ WebSocket 端口是：  8888 / 9999
 
 ## 后续更新
 
-以后仍然执行同一个一键命令即可更新源码并重新发布。脚本检测到已有：
+以后推荐执行专用更新命令：
+
+```bash
+curl -fsSL https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh && bash /tmp/wzry-update.sh
+```
+
+更新脚本会保留：
 
 ```text
 /www/wwwroot/wzry-space/auth/config.php
 ```
 
-默认会保留数据库配置和后台账号，不会覆盖密码。
+不会覆盖数据库配置和后台密码。
 
-如需强制重建数据库和后台账号，执行时加：
+如果你不是更新，而是想重新安装并强制重建数据库和后台账号，需要重新执行安装脚本并加：
 
 ```bash
 --reinstall-db
