@@ -97,8 +97,8 @@ INSERT INTO `app_settings` (`setting_key`, `setting_value`) VALUES
   ('version_code', '11'),
   ('version_name', 'v6.1.11'),
   ('apk_url', '/apk/ALinRadar-v6.1.11.apk'),
-  ('apk_url_github', ''),
-  ('apk_url_gitee', ''),
+  ('apk_url_github', 'https://raw.githubusercontent.com/a534686350/wzry-space/main/%E7%BD%91%E9%A1%B5%E5%89%8D%E5%90%8E%E5%8F%B0/apk/ALinRadar-v6.1.11.apk'),
+  ('apk_url_gitee', 'https://gitee.com/hl515/wzry-space/raw/main/%E7%BD%91%E9%A1%B5%E5%89%8D%E5%90%8E%E5%8F%B0/apk/ALinRadar-v6.1.11.apk'),
   ('update_title', '发现新版本'),
   ('update_message', '检测到新版本，请下载更新。')
 ON DUPLICATE KEY UPDATE `setting_value` = VALUES(`setting_value`);
