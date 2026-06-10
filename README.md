@@ -58,6 +58,7 @@ powershell -ExecutionPolicy Bypass -File ".\sync-remotes.ps1" -BuildApk -CommitM
 ## 云服务器 SSH 一键搭建
 
 一键安装脚本位于 `scripts/cloud-install.sh`，完整教程见 `CLOUD_INSTALL.md`。
+可直接复制的 SSH 命令见 `INSTALL_COMMANDS.md`。
 
 服务器 SSH 里执行后一切按提示填写，包含授权码、域名、数据库密码、后台账号密码：
 
