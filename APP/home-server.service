@@ -1,0 +1,24 @@
+[Unit]
+Description=Home Server (WebSocket 雷达数据服务)
+After=network.target
+
+[Service]
+Type=simple
+# ===== 修改为你的实际路径 =====
+WorkingDirectory=/www/wwwroot/你的站点目录
+ExecStart=/usr/bin/java -jar /www/wwwroot/你的站点目录/home-server-0.0.1-SNAPSHOT.jar
+# ==============================
+
+User=root
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+# 日志输出到 journald，用 journalctl -u home-server -f 查看
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=home-server
+
+[Install]
+WantedBy=multi-user.target

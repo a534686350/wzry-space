@@ -1,0 +1,45 @@
+# 王者荣耀空间
+
+王者荣耀雷达运营版项目，包含网页前后台、PHP API、WebSocket 服务部署脚本，以及 Android 悬浮窗 APP 源码。
+
+## 目录
+
+- `网页前后台/`：可部署的网站发布包，包含后台、API、资源、APK 下载目录。
+- `APP/`：开发/部署工作目录，包含 Android 工程和服务端脚本。
+- `APP/wzry_overlay_apk/`：Android APP 源码。
+
+## 敏感配置
+
+以下文件不会提交到 Git，请在服务器或本机自行配置：
+
+- `APP/auth/config.php`
+- `网页前后台/auth/config.php`
+- `APP/wzry_overlay_apk/yuanma/config.php`
+- `APP/wzry_overlay_apk/keystore.properties`
+- `APP/wzry_overlay_apk/*.keystore`
+
+Android 签名配置请复制 `APP/wzry_overlay_apk/keystore.properties.example` 为 `keystore.properties` 后填写。
+
+## 打包发布 APP
+
+在 Windows PowerShell 中运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "APP\wzry_overlay_apk\build-and-publish-release.ps1"
+```
+
+脚本会构建 release APK，并复制到：
+
+```text
+网页前后台/apk/ALinRadar-v6.1.11.apk
+```
+
+## 远程更新
+
+后台的 APP 远程管理支持配置：
+
+- 主 APK 地址
+- GitHub APK 直链
+- Gitee APK 直链
+
+APP 会优先尝试主地址，失败后自动切换备用线路。

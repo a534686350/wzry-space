@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>卡密激活 - 游戏雷达</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: "Microsoft YaHei", sans-serif; background: linear-gradient(135deg, #1a1f3a 0%, #0a0e27 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; color: #e0e0e0; padding: 20px; }
+        .box { background: rgba(47,54,60,0.95); border: 1px solid rgba(74,158,255,0.3); border-radius: 16px; padding: 40px; width: 100%; max-width: 400px; }
+        h1 { font-size: 22px; margin-bottom: 24px; color: #4a9eff; text-align: center; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-size: 14px; color: #aaa; }
+        input { width: 100%; padding: 14px 16px; border: 1px solid rgba(74,158,255,0.3); border-radius: 10px; background: rgba(26,31,36,0.8); color: #fff; font-size: 16px; }
+        input:focus { outline: none; border-color: #4a9eff; }
+        input.valid { border-color: rgba(81,207,102,0.6); }
+        input.invalid { border-color: rgba(255,107,107,0.6); }
+        .card-hint { font-size: 13px; margin-top: 8px; min-height: 20px; }
+        .card-hint.ok { color: #51cf66; }
+        .card-hint.err { color: #ff6b6b; }
+        .btn { width: 100%; padding: 14px; border: none; border-radius: 10px; background: linear-gradient(135deg, #4a9eff 0%, #258DF2 100%); color: #fff; font-size: 16px; cursor: pointer; margin-top: 8px; }
+        .btn:hover { opacity: 0.9; }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-outline { background: transparent; border: 1px solid rgba(74,158,255,0.5); margin-top: 16px; display: block; text-align: center; line-height: 2.8; text-decoration: none; color: #4a9eff; }
+        .btn-outline:hover { background: rgba(74,158,255,0.15); color: #6bb6ff; }
+        .msg { margin-top: 16px; font-size: 14px; text-align: center; min-height: 22px; }
+        .msg.err { color: #ff6b6b; }
+        .msg.ok { color: #51cf66; }
+        .link { margin-top: 24px; text-align: center; font-size: 14px; color: #888; }
+        .link a { color: #4a9eff; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h1>卡密激活</h1>
+        <p style="text-align:center;color:#888;margin-bottom:24px;font-size:14px;">已有账号请输入用户名和卡密，绑定后到期时间从激活时起算</p>
+        <form id="activateForm">
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" name="username" id="usernameInput" placeholder="请输入您的用户名" autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label>卡密</label>
+                <input type="text" name="card_code" id="cardCodeInput" placeholder="请输入卡密" autocomplete="off">
+                <div id="cardHint" class="card-hint"></div>
+            </div>
+            <button type="submit" class="btn" id="btnSubmit">激活卡密</button>
+        </form>
+        <div id="msg" class="msg"></div>
+        <div id="successBox" style="display:none; margin-top:20px; text-align:center;">
+            <p class="msg ok">激活成功，该账号有效期已更新</p>
+            <a href="login.html" class="btn btn-outline">去登录</a>
+            <a href="index.html" class="btn btn-outline" style="margin-top:8px;">返回首页</a>
+        </div>
+        <div class="link">
+            <a href="register.html">没有账号？去注册</a>
+            <span style="margin:0 8px;">|</span>
+            <a href="login.html">已有账号？去登录</a>
+        </div>
+    </div>
+    <script>
+        (function() {
+            var usernameInput = document.getElementById('usernameInput');
+            var cardInput = document.getElementById('cardCodeInput');
+            var cardHint = document.getElementById('cardHint');
+            var msg = document.getElementById('msg');
+            var successBox = document.getElementById('successBox');
+            var checkTimer = null;
+
+            function parseQuery() {
+                var q = {};
+                (window.location.search || '').replace(/^\?/, '').split('&').forEach(function(p) {
+                    var kv = p.split('=');
+                    if (kv[0]) q[decodeURIComponent(kv[0])] = decodeURIComponent(kv[1] || '');
+                });
+                return q;
+            }
+            var q = parseQuery();
+            if (q.username) usernameInput.value = q.username;
+            if (q.card_code) {
+                cardInput.value = q.card_code;
+                cardInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+
+            // 若已登录可预填当前用户名
+            fetch('api/index.php?module=session_check', { credentials: 'include' })
+                .then(function(r) { return r.json(); })
+                .then(function(res) {
+                    if (res.logged_in && typeof res.username !== 'undefined' && res.username && !usernameInput.value) {
+                        usernameInput.value = res.username;
+                    }
+                }).catch(function() {});
+
+            cardInput.addEventListener('input', function() {
+                successBox.style.display = 'none';
+                msg.textContent = '';
+                var code = this.value.trim();
+                cardHint.textContent = '';
+                cardHint.className = 'card-hint';
+                cardInput.classList.remove('valid', 'invalid');
+                if (checkTimer) clearTimeout(checkTimer);
+                if (code.length < 4) return;
+                checkTimer = setTimeout(function() {
+                    fetch('api/index.php?module=card&action=check&card_code=' + encodeURIComponent(code), { credentials: 'include' })
+                        .then(function(r) { return r.json(); })
+                        .then(function(res) {
+                            if (res.data && res.data.valid === true) {
+                                cardHint.textContent = '卡密有效';
+                                cardHint.className = 'card-hint ok';
+                                cardInput.classList.add('valid');
+                            } else {
+                                cardHint.textContent = res.msg || '卡密无效';
+                                cardHint.className = 'card-hint err';
+                                cardInput.classList.add('invalid');
+                            }
+                        }).catch(function() {
+                            cardHint.textContent = '校验请求失败';
+                            cardHint.className = 'card-hint err';
+                        });
+                }, 400);
+            });
+
+            document.getElementById('activateForm').onsubmit = function(e) {
+                e.preventDefault();
+                msg.className = 'msg';
+                msg.textContent = '';
+                var username = usernameInput.value.trim();
+                var code = cardInput.value.trim();
+                if (!username) {
+                    msg.className = 'msg err';
+                    msg.textContent = '请输入用户名';
+                    return;
+                }
+                if (!code) {
+                    msg.className = 'msg err';
+                    msg.textContent = '请输入卡密';
+                    return;
+                }
+                document.getElementById('btnSubmit').disabled = true;
+                fetch('api/index.php?module=activate_card', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ username: username, card_code: code })
+                })
+                    .then(function(r) { return r.json(); })
+                    .then(function(res) {
+                        document.getElementById('btnSubmit').disabled = false;
+                        if (res.code === 0) {
+                            successBox.style.display = 'block';
+                            msg.textContent = '';
+                        } else {
+                            msg.className = 'msg err';
+                            msg.textContent = res.msg || '激活失败';
+                        }
+                    })
+                    .catch(function() {
+                        document.getElementById('btnSubmit').disabled = false;
+                        msg.className = 'msg err';
+                        msg.textContent = '网络错误';
+                    });
+            };
+        })();
+    </script>
+</body>
+</html>

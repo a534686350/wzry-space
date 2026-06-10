@@ -1,0 +1,57 @@
+plugins {
+    id "com.android.application"
+}
+
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+def hasReleaseKeystore = keystorePropertiesFile.exists()
+if (hasReleaseKeystore) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
+android {
+    namespace "com.qy.wzryoverlay"
+    compileSdk 35
+
+    signingConfigs {
+        release {
+            if (hasReleaseKeystore) {
+                storeFile rootProject.file(keystoreProperties["storeFile"])
+                storePassword keystoreProperties["storePassword"]
+                keyAlias keystoreProperties["keyAlias"]
+                keyPassword keystoreProperties["keyPassword"]
+            }
+        }
+    }
+
+    defaultConfig {
+        applicationId "com.qy.wzryoverlay"
+        minSdk 23
+        targetSdk 35
+        versionCode 11
+        versionName "v6.1.11"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (hasReleaseKeystore) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    lintOptions {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    implementation "com.squareup.okhttp3:okhttp:4.12.0"
+}
