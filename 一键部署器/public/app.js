@@ -39,11 +39,7 @@
         connChip:        $('#connChip'),
         connState:       $('#connState'),
         pwIcon:          $('#pwIcon'),
-        accessModal:     $('#accessModal'),
-        accessForm:      $('#accessForm'),
-        accessCode:      $('#accessCode'),
-        accessErr:       $('#accessErr'),
-        accessHint:      $('#accessHint'),
+        deployCard:      $('#f-deploy-card'),
         cardAdminField:  $('#cardAdminField'),
         cardAdminPass:   $('#f-card-admin-password'),
         opsConfig:       $('#opsConfig'),
@@ -55,8 +51,6 @@
     // ------------------------------------------------------------------
     const state = {
         deploying: false,
-        accessCode: sessionStorage.getItem('radar.accessCode') || '',
-        accessRequired: false,
         rawLog: [],
     };
     const modeLabels = {
@@ -89,15 +83,8 @@
 
     async function bootMeta() {
         try {
-            const r = await fetch('/api/meta', { cache: 'no-store' });
-            const meta = await r.json();
-            state.accessRequired = !!meta.accessRequired;
-            setAccessHint(meta.accessHint || '');
-            if (state.accessRequired && !state.accessCode) {
-                showAccessModal();
-            } else {
-                initSocket();
-            }
+            await fetch('/api/meta', { cache: 'no-store' });
+            initSocket();
         } catch (err) {
             // 即使 /api/meta 失败，也尝试直接连 socket
             initSocket();
@@ -116,7 +103,6 @@
         }
         socket = io({
             transports: ['websocket', 'polling'],
-            auth: { accessCode: state.accessCode },
         });
 
         socket.on('connect', () => {
@@ -127,12 +113,6 @@
             if (state.deploying) lockForm(false);
         });
         socket.on('connect_error', (err) => {
-            if (err && err.message === 'ACCESS_DENIED') {
-                sessionStorage.removeItem('radar.accessCode');
-                state.accessCode = '';
-                showAccessModal(true);
-                return;
-            }
             setConnState('', '连接失败');
         });
 
@@ -142,7 +122,7 @@
         socket.on('deploy:done',     ({ urls }) => {
             setProgress(100, '部署完成');
             els.doneMsg.style.display = 'block';
-            els.doneIp.textContent = '当前访问地址为：' + (urls.site || urls.static80 || '');
+            els.doneIp.textContent = '部署信息已保存到后台管理，当前卡密已失效。';
             lockForm(false);
             state.deploying = false;
         });
@@ -165,34 +145,6 @@
             els.testResult.style.display = 'block';
         });
     }
-
-    // ------------------------------------------------------------------
-    // Access code modal
-    // ------------------------------------------------------------------
-    function showAccessModal(isError) {
-        els.accessModal.classList.remove('hidden');
-        els.accessErr.classList.toggle('show', !!isError);
-        setTimeout(() => els.accessCode.focus(), 50);
-    }
-    function setAccessHint(hint) {
-        if (!els.accessHint) return;
-        const text = String(hint || '').trim();
-        els.accessHint.textContent = text ? '提示：' + text : '';
-        els.accessHint.classList.toggle('show', !!text);
-    }
-    function hideAccessModal() {
-        els.accessModal.classList.add('hidden');
-    }
-    els.accessForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const code = els.accessCode.value.trim();
-        if (!code) return;
-        state.accessCode = code;
-        sessionStorage.setItem('radar.accessCode', code);
-        hideAccessModal();
-        if (socket) socket.disconnect();
-        initSocket();
-    });
 
     // ------------------------------------------------------------------
     // Steps timeline
@@ -374,6 +326,7 @@
 
         const fd = new FormData(els.form);
         const payload = {
+            deployCard: String(fd.get('deployCard') || '').trim(),
             host: String(fd.get('host') || '').trim(),
             port: Number(fd.get('port') || 22),
             sitePort: Number(fd.get('sitePort') || 80),
@@ -388,6 +341,10 @@
             opsAdminUser: String(fd.get('opsAdminUser') || 'admin').trim(),
             opsAdminPassword: String(fd.get('opsAdminPassword') || ''),
         };
+        if (!payload.deployCard) {
+            appendLog('error', '请先填写部署卡密');
+            return;
+        }
         if (!payload.host || !payload.username || !payload.password) {
             appendLog('error', '请完整填写服务器信息');
             return;
@@ -427,7 +384,7 @@
         els.doneMsg.style.display = 'none';
         lockForm(true);
 
-        appendLog('info', '发起部署 → ' + payload.username + '@' + payload.host + ':' + payload.port + '，网站端口 ' + payload.sitePort + '，版本 ' + (modeLabels[payload.deployMode] || payload.deployMode));
+        appendLog('info', '发起部署，部署卡密将在成功后自动失效，版本 ' + (modeLabels[payload.deployMode] || payload.deployMode));
         socket.emit('deploy:start', payload);
     });
 
@@ -444,12 +401,19 @@
         }
         const fd = new FormData(els.form);
         const payload = {
+            deployCard: String(fd.get('deployCard') || '').trim(),
             host: String(fd.get('host') || '').trim(),
             port: Number(fd.get('port') || 22),
             sitePort: Number(fd.get('sitePort') || 80),
             username: String(fd.get('username') || '').trim(),
             password: String(fd.get('password') || ''),
         };
+        if (!payload.deployCard) {
+            els.testResult.className = 'test-result fail';
+            els.testResult.innerHTML = '❌ 请先填写部署卡密';
+            els.testResult.style.display = 'block';
+            return;
+        }
         if (!payload.host || !payload.username || !payload.password) {
             els.testResult.className = 'test-result fail';
             els.testResult.innerHTML = '❌ 请先填写完整的服务器信息';

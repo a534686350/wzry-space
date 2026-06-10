@@ -16,8 +16,11 @@ const REMOTE_APP_DIR = `${REMOTE_DIR}/${APP_DIR_NAME}`;
 function parseArgs() {
   const args = {};
   for (const a of process.argv.slice(2)) {
-    const m = a.match(/^--(\w+)=(.*)$/);
-    if (m) args[m[1]] = m[2];
+    const m = a.match(/^--([\w-]+)=(.*)$/);
+    if (m) {
+      const key = m[1].replace(/-([a-z])/g, (_, ch) => ch.toUpperCase());
+      args[key] = m[2];
+    }
   }
   return args;
 }
@@ -81,11 +84,16 @@ async function main() {
   const user = args.user || 'root';
   const port = args.port || 22;
   const password = args.password || process.env.RADAR_UPLOAD_PASSWORD || process.env.SSH_PASSWORD;
-  const accessCode = args.code || '';
-  const accessHint = args.hint || '';
+  const adminUser = args.adminUser || process.env.RADAR_ADMIN_USER || 'admin';
+  const adminPassword =
+    args.adminPassword ||
+    process.env.RADAR_ADMIN_PASSWORD ||
+    args.code ||
+    process.env.RADAR_UPLOAD_ADMIN_PASSWORD ||
+    '';
 
   if (!host || !password) {
-    console.log('Usage: node upload.js --host=IP --password=PWD [--user=root] [--port=22] [--code=admin888]');
+    console.log('Usage: node upload.js --host=IP --password=PWD [--user=root] [--port=22] [--admin-user=admin] [--admin-password=PWD]');
     process.exit(1);
   }
 
@@ -139,8 +147,8 @@ User=root
 WorkingDirectory=${REMOTE_APP_DIR}
 Environment=NODE_ENV=production
 Environment=PAYLOAD_DIR=${REMOTE_WEB_DIR}
-${accessCode ? `Environment=ACCESS_CODE=${accessCode}` : ''}
-${accessHint ? `Environment=ACCESS_HINT=${accessHint}` : ''}
+Environment=ADMIN_USERNAME=${adminUser}
+${adminPassword ? `Environment=ADMIN_PASSWORD=${adminPassword}` : ''}
 ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=10
@@ -157,9 +165,12 @@ WantedBy=multi-user.target`;
     await sshExec(conn, 'sleep 3');
 
     console.log('Testing server startup (foreground)...');
-    const env = `${accessCode ? `ACCESS_CODE=${accessCode} ` : ''}${accessHint ? `ACCESS_HINT=${accessHint} ` : ''}`;
+    const envParts = [`ADMIN_USERNAME=${shellQuote(adminUser)}`];
+    if (adminPassword) envParts.push(`ADMIN_PASSWORD=${shellQuote(adminPassword)}`);
+    envParts.push(`PAYLOAD_DIR=${shellQuote(REMOTE_WEB_DIR)}`);
+    const foregroundCmd = `${envParts.join(' ')} node server.js`;
     try {
-      await sshExec(conn, `cd '${REMOTE_APP_DIR}' && timeout 5 bash -c '${env}PAYLOAD_DIR="${REMOTE_WEB_DIR}" node server.js' 2>&1 || true`);
+      await sshExec(conn, `cd '${REMOTE_APP_DIR}' && timeout 5 bash -lc ${shellQuote(foregroundCmd)} 2>&1 || true`);
     } catch (_) {}
 
     console.log('Starting server (background)...');
@@ -183,13 +194,17 @@ WantedBy=multi-user.target`;
 
     console.log('');
     console.log('Done: http://' + host + ':3000');
-    if (accessCode) console.log('Access code:', accessCode);
+    console.log('Admin user:', adminUser);
 
   } catch (err) {
     console.error('Error:', err.message);
   } finally {
     conn.end();
   }
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
 main();
