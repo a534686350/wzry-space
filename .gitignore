@@ -35,3 +35,7 @@ APP/wzry_overlay_apk/*.keystore
 Thumbs.db
 *.tmp
 *.bak
+
+# Python cache
+__pycache__/
+*.pyc

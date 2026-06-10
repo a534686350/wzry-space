@@ -4,9 +4,9 @@
 
 ## 目录
 
-- `网页前后台/`：可部署的网站发布包，包含后台、API、资源、APK 下载目录。
-- `APP/`：开发/部署工作目录，包含 Android 工程和服务端脚本。
-- `APP/wzry_overlay_apk/`：Android APP 源码。
+- `网页前后台/`：可部署的网站发布包，包含后台、API、资源和 APK 下载目录。
+- `APP/`：开发与部署工作目录，包含 Android 工程和服务端脚本。
+- `APP/wzry_overlay_apk/`：Android APP 源码与打包脚本。
 
 ## 敏感配置
 
@@ -34,6 +34,27 @@ powershell -ExecutionPolicy Bypass -File "APP\wzry_overlay_apk\build-and-publish
 网页前后台/apk/ALinRadar-v6.1.11.apk
 ```
 
+## 同步到 GitHub 和 Gitee
+
+当前远程仓库：
+
+- GitHub: `https://github.com/a534686350/wzry-space`
+- Gitee: `https://gitee.com/hl515/wzry-space`
+
+普通同步：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\sync-remotes.ps1" -CommitMessage "Update release"
+```
+
+打包、提交、同步一步完成：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\sync-remotes.ps1" -BuildApk -CommitMessage "Release v6.1.12"
+```
+
+脚本会先推送 Gitee，再推送 GitHub；如果 GitHub 普通 `git push` 因网络失败，会自动改用 GitHub Git Data API 同步内容。
+
 ## 远程更新
 
 后台的 APP 远程管理支持配置：
@@ -42,11 +63,4 @@ powershell -ExecutionPolicy Bypass -File "APP\wzry_overlay_apk\build-and-publish
 - GitHub APK 直链
 - Gitee APK 直链
 
-APP 会优先尝试主地址，失败后自动切换备用线路。
-
-当前远程仓库：
-
-- GitHub: `https://github.com/a534686350/wzry-space`
-- Gitee: `https://gitee.com/hl515/wzry-space`
-
-更多说明见 `REMOTE_UPDATE.md`。
+APP 会优先尝试主地址，失败后自动切换备用线路。更多说明见 `REMOTE_UPDATE.md`。
