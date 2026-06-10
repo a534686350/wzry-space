@@ -1,0 +1,26 @@
+{
+  "name": "radar-one-click-deployer",
+  "version": "1.0.0",
+  "description": "一键远程部署 Java + 静态网页 的 SSH 自动化工具",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "ssh",
+    "deploy",
+    "one-click",
+    "radar"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "ssh2": "^1.15.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
