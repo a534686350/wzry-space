@@ -43,3 +43,10 @@ powershell -ExecutionPolicy Bypass -File "APP\wzry_overlay_apk\build-and-publish
 - Gitee APK 直链
 
 APP 会优先尝试主地址，失败后自动切换备用线路。
+
+当前远程仓库：
+
+- GitHub: `https://github.com/a534686350/wzry-space`
+- Gitee: `https://gitee.com/hl515/wzry-space`
+
+更多说明见 `REMOTE_UPDATE.md`。
