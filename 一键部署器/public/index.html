@@ -921,10 +921,15 @@ code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monosp
 
                 <form id="deployForm" autocomplete="off">
                     <div class="form-grid">
+                        <div class="mode-box" style="border-color:rgba(251,191,36,.55);background:rgba(251,191,36,.08);">
+                            <div class="mode-title">先填写部署卡密</div>
+                            <div class="form-note"><span class="bullet">!</span><span>卡密由后台管理生成，只能成功部署一次。没有卡密不能测试连接，也不能开始部署。</span></div>
+                        </div>
+
                         <div class="field full">
                             <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 4v6c0 5-3 8-7 10-4-2-7-5-7-10V6l7-4z"/><path d="M9 12l2 2 4-4"/></svg>
                             <input type="password" id="f-deploy-card" name="deployCard" placeholder=" " required autocomplete="one-time-code">
-                            <label for="f-deploy-card">部署卡密</label>
+                            <label for="f-deploy-card">部署卡密（必填）</label>
                         </div>
 
                         <div class="field full">
@@ -1136,7 +1141,7 @@ code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monosp
 </footer>
 
 <script src="/socket.io/socket.io.js"></script>
-<script src="/app.js?v=8"></script>
+<script src="/app.js?v=9"></script>
 
 </body>
 </html>

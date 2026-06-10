@@ -100,6 +100,21 @@ for (const variant of Object.values(PAYLOAD_VARIANTS)) {
 const app = express();
 app.use(express.json({ limit: '256kb' }));
 
+app.use((req, res, next) => {
+  if (
+    req.path === '/' ||
+    req.path === '/index.html' ||
+    req.path === '/admin' ||
+    req.path === '/app.js' ||
+    req.path.endsWith('.html')
+  ) {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+  }
+  next();
+});
+
 app.get('/admin', (req, res) => {
   res.type('html').send(renderAdminPage());
 });
@@ -143,7 +158,17 @@ app.post('/api/admin/cards', requireAdmin, (req, res) => {
   });
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: false,
+  maxAge: 0,
+  setHeaders(res, filePath) {
+    if (/\.(html|js|css)$/i.test(filePath)) {
+      res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.set('Pragma', 'no-cache');
+      res.set('Expires', '0');
+    }
+  },
+}));
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, payloadRoot: PAYLOAD_ROOT, variants: publicVariants() });
@@ -838,7 +863,7 @@ function renderAdminPage() {
         <input id="adminUser" autocomplete="username" value="${ADMIN_USERNAME.replace(/"/g, '&quot;')}">
         <label for="adminPass">后台密码</label>
         <input id="adminPass" type="password" autocomplete="current-password">
-        <button type="submit">登录后台</button>
+        <button type="submit" id="loginBtn">登录后台</button>
       </form>
       <div class="status" id="status"></div>
     </section>
@@ -891,6 +916,7 @@ function renderAdminPage() {
       loginForm: document.getElementById('loginForm'),
       adminUser: document.getElementById('adminUser'),
       adminPass: document.getElementById('adminPass'),
+      loginBtn: document.getElementById('loginBtn'),
       status: document.getElementById('status'),
       cardForm: document.getElementById('cardForm'),
       cardQty: document.getElementById('cardQty'),
@@ -924,22 +950,30 @@ function renderAdminPage() {
       els.logout.classList.toggle('hidden', !ok);
     }
     async function login(){
+      if (els.loginBtn.disabled) return;
       els.status.textContent = '正在登录...';
-      const res = await fetch('/api/admin/login', {
-        method:'POST',
-        headers:{'content-type':'application/json'},
-        body: JSON.stringify({username: els.adminUser.value.trim(), password: els.adminPass.value})
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) {
-        els.status.textContent = data.message || '登录失败';
-        return;
+      els.loginBtn.disabled = true;
+      try {
+        const res = await fetch('/api/admin/login', {
+          method:'POST',
+          headers:{'content-type':'application/json'},
+          body: JSON.stringify({username: els.adminUser.value.trim(), password: els.adminPass.value})
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          els.status.textContent = data.message || '登录失败';
+          return;
+        }
+        token = data.token;
+        sessionStorage.setItem('radar.adminToken', token);
+        els.adminPass.value = '';
+        showAuthed(true);
+        await loadSummary();
+      } catch (err) {
+        els.status.textContent = err.message || '登录失败，请刷新后重试';
+      } finally {
+        els.loginBtn.disabled = false;
       }
-      token = data.token;
-      sessionStorage.setItem('radar.adminToken', token);
-      els.adminPass.value = '';
-      showAuthed(true);
-      await loadSummary();
     }
     async function loadSummary(){
       const res = await fetch('/api/admin/summary', {headers:authHeaders(), cache:'no-store'});
@@ -1055,6 +1089,7 @@ function renderAdminPage() {
       setTimeout(() => btn.textContent = '复制', 1200);
     });
     els.loginForm.addEventListener('submit', e => {e.preventDefault(); login().catch(err => els.status.textContent = err.message || '登录失败');});
+    els.loginBtn.addEventListener('click', e => {e.preventDefault(); login().catch(err => els.status.textContent = err.message || '登录失败');});
     els.cardForm.addEventListener('submit', e => {e.preventDefault(); createCards().catch(err => els.cardStatus.textContent = err.message || '生成失败');});
     els.refresh.addEventListener('click', () => loadSummary().catch(err => els.status.textContent = err.message || '读取失败'));
     els.logout.addEventListener('click', async () => {
