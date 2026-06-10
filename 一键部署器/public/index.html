@@ -1,0 +1,1158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<title>RadarDeploy · 一键远程部署</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='none' stroke='%234a9eff' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='4' fill='%234a9eff'/%3E%3C/svg%3E">
+<style>
+/* ============================================================
+ * Reset & Base
+ * ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #e6ecff;
+    background: #05070f;
+    min-height: 100vh;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+}
+img, svg { display: block; max-width: 100%; }
+button { font-family: inherit; cursor: pointer; border: 0; background: none; color: inherit; }
+input, select { font-family: inherit; }
+a { color: inherit; text-decoration: none; }
+code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monospace; }
+
+/* ============================================================
+ * Background (animated radial gradients)
+ * ============================================================ */
+.bg-layer {
+    position: fixed; inset: 0; z-index: -2;
+    background:
+        radial-gradient(ellipse at 20% 0%, rgba(74, 158, 255, 0.18) 0%, transparent 55%),
+        radial-gradient(ellipse at 85% 20%, rgba(34, 211, 238, 0.13) 0%, transparent 50%),
+        radial-gradient(ellipse at 50% 100%, rgba(168, 85, 247, 0.18) 0%, transparent 55%),
+        radial-gradient(ellipse at 100% 80%, rgba(244, 114, 182, 0.1) 0%, transparent 50%),
+        linear-gradient(180deg, #05070f 0%, #0a0e1f 50%, #05070f 100%);
+}
+.bg-grid {
+    position: fixed; inset: 0; z-index: -1;
+    background-image:
+        linear-gradient(rgba(74, 158, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(74, 158, 255, 0.04) 1px, transparent 1px);
+    background-size: 60px 60px;
+    mask-image: radial-gradient(ellipse at 50% 30%, #000 0%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse at 50% 30%, #000 0%, transparent 75%);
+    pointer-events: none;
+}
+
+/* ============================================================
+ * App Bar
+ * ============================================================ */
+.appbar {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; align-items: center; gap: 20px;
+    padding: 14px 28px;
+    background: rgba(8, 11, 24, 0.72);
+    backdrop-filter: saturate(160%) blur(14px);
+    -webkit-backdrop-filter: saturate(160%) blur(14px);
+    border-bottom: 1px solid rgba(74, 158, 255, 0.12);
+}
+.brand { display: flex; align-items: center; gap: 14px; }
+.brand-logo {
+    width: 38px; height: 38px;
+    position: relative;
+    flex-shrink: 0;
+}
+.brand-logo svg { width: 100%; height: 100%; }
+.brand-logo .ring {
+    transform-origin: center;
+    animation: spin 4s linear infinite;
+    transform-box: fill-box;
+}
+.brand-logo .sweep {
+    transform-origin: 32px 32px;
+    animation: sweep 3s linear infinite;
+}
+.brand-text h1 {
+    font-size: 17px; font-weight: 700; letter-spacing: -0.02em;
+    background: linear-gradient(135deg, #8ec0ff 0%, #22d3ee 50%, #c084fc 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    line-height: 1.1;
+}
+.brand-text .sub { font-size: 11px; color: #8f99b8; letter-spacing: 0.5px; }
+
+.trust-nav {
+    display: flex; align-items: center; gap: 6px;
+    margin-left: auto;
+    flex-wrap: wrap;
+}
+.trust-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 11px;
+    background: rgba(74, 158, 255, 0.07);
+    border: 1px solid rgba(74, 158, 255, 0.14);
+    border-radius: 100px;
+    font-size: 11.5px;
+    color: #bcc7e8;
+    transition: background 0.2s;
+}
+.trust-pill:hover { background: rgba(74, 158, 255, 0.12); }
+.trust-pill .ic { opacity: 0.85; }
+
+.conn-chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 14px;
+    background: rgba(143, 153, 184, 0.08);
+    border: 1px solid rgba(143, 153, 184, 0.2);
+    border-radius: 100px;
+    font-size: 11.5px; color: #8f99b8;
+}
+.conn-chip .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #f43f5e;
+    box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.15);
+    animation: pulse 1.8s ease-in-out infinite;
+}
+.conn-chip.ok { border-color: rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.08); color: #d1fae5; }
+.conn-chip.ok .dot { background: #10b981; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2); }
+
+/* ============================================================
+ * Layout
+ * ============================================================ */
+.layout {
+    max-width: 1280px;
+    margin: 32px auto 20px;
+    padding: 0 28px;
+}
+.grid {
+    display: grid;
+    grid-template-columns: minmax(360px, 1fr) minmax(0, 1.4fr);
+    gap: 20px;
+    align-items: start;
+}
+@media (max-width: 980px) {
+    .grid { grid-template-columns: 1fr; }
+    .trust-nav { display: none; }
+    .appbar { padding: 14px 18px; }
+    .layout { padding: 0 16px; }
+}
+
+.col-left, .col-right { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+
+/* ============================================================
+ * Cards
+ * ============================================================ */
+.card {
+    position: relative;
+    background:
+        linear-gradient(145deg, rgba(18, 24, 48, 0.65) 0%, rgba(12, 16, 36, 0.55) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 16px;
+    padding: 22px 22px;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.card.hidden { display: none !important; }
+
+.card-head { margin-bottom: 14px; }
+.card-head h2 {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 16px; font-weight: 600; letter-spacing: -0.01em;
+    color: #f2f5ff;
+}
+.card-head .tip-text {
+    margin-top: 4px;
+    font-size: 12.5px; color: #8f99b8;
+}
+.step-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 24px; height: 24px; padding: 0 7px;
+    background: linear-gradient(135deg, rgba(74,158,255,0.2), rgba(34,211,238,0.2));
+    border: 1px solid rgba(74, 158, 255, 0.28);
+    border-radius: 7px;
+    font-size: 11px; font-weight: 700;
+    color: #8ec0ff;
+    letter-spacing: 0.5px;
+}
+
+/* ============================================================
+ * Form: floating labels
+ * ============================================================ */
+.form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+.form-grid .full { grid-column: 1 / -1; }
+
+.field {
+    position: relative;
+}
+.field input {
+    width: 100%;
+    height: 50px;
+    padding: 24px 14px 6px 40px;
+    background: rgba(5, 7, 15, 0.55);
+    border: 1px solid rgba(120, 160, 255, 0.18);
+    border-radius: 10px;
+    color: #e6ecff;
+    font-size: 14px;
+    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+    outline: none;
+}
+.field input:focus {
+    border-color: #4a9eff;
+    background: rgba(5, 7, 15, 0.75);
+    box-shadow: 0 0 0 4px rgba(74, 158, 255, 0.14);
+}
+.field input:disabled { opacity: 0.5; cursor: not-allowed; }
+.field label {
+    position: absolute; left: 40px; top: 13px;
+    transform: none;
+    color: #6fd3ff;
+    font-size: 11px;
+    letter-spacing: 0.4px;
+    pointer-events: none;
+    transition: 0.18s ease;
+    background: transparent;
+}
+.field input:focus + label,
+.field input:not(:placeholder-shown) + label {
+    top: 13px;
+    transform: none;
+    font-size: 11px;
+    color: #6fd3ff;
+    letter-spacing: 0.4px;
+}
+.field .ic {
+    position: absolute; left: 13px; top: 50%;
+    transform: translateY(-50%);
+    width: 18px; height: 18px;
+    color: #6fd3ff;
+    opacity: 0.7;
+    pointer-events: none;
+}
+.field .pw-toggle {
+    position: absolute; right: 6px; top: 50%;
+    transform: translateY(-50%);
+    width: 34px; height: 34px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: #8f99b8;
+    border-radius: 8px;
+    transition: background 0.2s, color 0.2s;
+}
+.field .pw-toggle:hover { background: rgba(120,160,255,0.12); color: #e6ecff; }
+
+.mode-box {
+    grid-column: 1 / -1;
+    padding: 12px;
+    background: rgba(5, 7, 15, 0.42);
+    border: 1px solid rgba(120, 160, 255, 0.16);
+    border-radius: 10px;
+}
+.mode-title {
+    margin-bottom: 10px;
+    color: #6fd3ff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+}
+.mode-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+    gap: 10px;
+}
+.mode-option {
+    position: relative;
+    display: flex;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid rgba(120, 160, 255, 0.16);
+    border-radius: 9px;
+    background: rgba(12, 18, 38, 0.62);
+    cursor: pointer;
+}
+.mode-option input {
+    width: 16px;
+    height: 16px;
+    margin-top: 2px;
+    accent-color: #4a9eff;
+}
+.mode-option strong {
+    display: block;
+    color: #e6ecff;
+    font-size: 13px;
+}
+.mode-option span {
+    display: block;
+    margin-top: 2px;
+    color: #8f99b8;
+    font-size: 11.5px;
+}
+.mode-option:has(input:checked) {
+    border-color: rgba(74, 158, 255, 0.54);
+    background: rgba(74, 158, 255, 0.12);
+}
+.card-admin-field.hidden { display: none; }
+.ops-config {
+    grid-column: 1 / -1;
+    padding: 12px;
+    background: rgba(5, 7, 15, 0.42);
+    border: 1px solid rgba(120, 160, 255, 0.16);
+    border-radius: 10px;
+}
+.ops-config.hidden { display: none; }
+.ops-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+.ops-grid .full { grid-column: 1 / -1; }
+@media (max-width: 640px) {
+    .ops-grid { grid-template-columns: 1fr; }
+    .ops-grid .full { grid-column: auto; }
+}
+
+.form-notes {
+    margin-top: 14px;
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 12px 14px;
+    background: linear-gradient(135deg, rgba(74,158,255,0.06), rgba(34,211,238,0.03));
+    border: 1px solid rgba(74, 158, 255, 0.14);
+    border-radius: 10px;
+}
+.form-note {
+    display: flex; align-items: flex-start; gap: 8px;
+    font-size: 12px; color: #bcc7e8;
+}
+.form-note .bullet { color: #6fd3ff; font-weight: 700; }
+.form-note code {
+    font-size: 11px; padding: 1px 6px;
+    background: rgba(74,158,255,0.16); border-radius: 4px;
+    color: #c7dcff;
+}
+
+.actions { margin-top: 16px; display: flex; gap: 10px; }
+.deploy-btn {
+    flex: 1;
+    position: relative;
+    padding: 14px 20px;
+    background: linear-gradient(135deg, #4a9eff 0%, #3d7de8 50%, #a855f7 100%);
+    background-size: 200% 200%;
+    border-radius: 11px;
+    color: #fff;
+    font-size: 14.5px; font-weight: 600; letter-spacing: 0.3px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+    box-shadow:
+        0 8px 24px rgba(61, 125, 232, 0.35),
+        inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    transition: transform 0.15s, box-shadow 0.2s, background-position 0.5s;
+    overflow: hidden;
+}
+.deploy-btn::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.25), transparent);
+    transform: translateX(-100%);
+    transition: transform 0.7s;
+}
+.deploy-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    background-position: 100% 100%;
+    box-shadow: 0 12px 30px rgba(168, 85, 247, 0.45);
+}
+.deploy-btn:hover:not(:disabled)::before { transform: translateX(100%); }
+.deploy-btn:active:not(:disabled) { transform: translateY(0); }
+.deploy-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.deploy-btn .spin {
+    display: inline-block;
+    width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,0.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+}
+
+.ghost-btn {
+    padding: 14px 18px;
+    color: #8f99b8;
+    border: 1px solid rgba(120, 160, 255, 0.2);
+    border-radius: 11px;
+    font-size: 13px;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.ghost-btn:hover:not(:disabled) { color: #e6ecff; border-color: rgba(244, 63, 94, 0.4); background: rgba(244, 63, 94, 0.06); }
+.ghost-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.test-result {
+    margin-top: 12px;
+    padding: 12px 16px;
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.6;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+.test-result.ok {
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    color: #4ade80;
+}
+.test-result.fail {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #f87171;
+}
+.test-result .os-info {
+    font-weight: 600;
+    font-size: 14px;
+    color: #6fd3ff;
+}
+
+/* ============================================================
+ * Info Card (deploy items)
+ * ============================================================ */
+.info-card h3 {
+    font-size: 13px; font-weight: 600;
+    color: #8f99b8; letter-spacing: 0.3px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+}
+.deploy-items { display: grid; gap: 10px; }
+.deploy-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 14px;
+    background: rgba(5, 7, 15, 0.4);
+    border: 1px solid rgba(120, 160, 255, 0.12);
+    border-radius: 10px;
+}
+.item-icon {
+    width: 38px; height: 38px; border-radius: 10px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+}
+.item-icon.java { background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(249, 115, 22, 0.2)); color: #ffbd93; border: 1px solid rgba(249, 115, 22, 0.2); }
+.item-icon.web { background: linear-gradient(135deg, rgba(74, 158, 255, 0.2), rgba(34, 211, 238, 0.2)); color: #8ec0ff; border: 1px solid rgba(74, 158, 255, 0.2); }
+.item-icon.fw { background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(34, 211, 238, 0.15)); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.2); }
+.item-text { flex: 1; min-width: 0; }
+.item-text strong { display: block; font-size: 13.5px; color: #e6ecff; margin-bottom: 2px; }
+.item-text span { font-size: 11.5px; color: #8f99b8; }
+.item-tag {
+    padding: 3px 8px;
+    background: rgba(120, 160, 255, 0.1);
+    border: 1px solid rgba(120, 160, 255, 0.2);
+    border-radius: 6px;
+    font-size: 10.5px;
+    color: #8ec0ff;
+    font-family: 'JetBrains Mono', monospace;
+    flex-shrink: 0;
+}
+
+/* ============================================================
+ * Progress Card
+ * ============================================================ */
+.progress-header {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    margin-bottom: 12px;
+}
+.progress-percent-big {
+    font-size: 32px; font-weight: 700;
+    background: linear-gradient(135deg, #4a9eff, #22d3ee, #a855f7);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+.progress-bar {
+    height: 8px;
+    background: rgba(5, 7, 15, 0.6);
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid rgba(120, 160, 255, 0.08);
+}
+.progress-fill {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, #4a9eff 0%, #22d3ee 50%, #a855f7 100%);
+    background-size: 200% 100%;
+    border-radius: 10px;
+    transition: width 0.4s ease;
+    animation: shimmer 2s linear infinite;
+    box-shadow: 0 0 10px rgba(74, 158, 255, 0.45);
+}
+.progress-text {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #8f99b8;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+/* Timeline */
+.timeline {
+    list-style: none;
+    margin-top: 16px;
+    position: relative;
+}
+.timeline::before {
+    content: '';
+    position: absolute; left: 15px; top: 8px; bottom: 8px;
+    width: 2px;
+    background: linear-gradient(180deg, rgba(120,160,255,0.15), rgba(120,160,255,0.05));
+}
+.timeline li {
+    position: relative;
+    display: flex; gap: 14px;
+    padding: 9px 0;
+    padding-left: 44px;
+}
+.timeline li .t-dot {
+    position: absolute; left: 7px; top: 11px;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: rgba(18, 24, 48, 1);
+    border: 2px solid rgba(120, 160, 255, 0.3);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700;
+    color: #8f99b8;
+    transition: 0.3s;
+    z-index: 1;
+}
+.timeline li .t-label {
+    font-size: 13.5px;
+    color: #bcc7e8;
+    transition: color 0.2s;
+}
+.timeline li .t-sub {
+    margin-top: 2px;
+    font-size: 11.5px;
+    color: #6b7490;
+    font-family: 'JetBrains Mono', monospace;
+    word-break: break-all;
+}
+
+.timeline li.running .t-dot {
+    border-color: #4a9eff;
+    background: rgba(74, 158, 255, 0.22);
+    color: #8ec0ff;
+    animation: spin 1.1s linear infinite;
+    box-shadow: 0 0 0 4px rgba(74, 158, 255, 0.12);
+}
+.timeline li.running .t-dot::before {
+    content: '';
+    position: absolute;
+    width: 10px; height: 10px;
+    border: 2px solid transparent;
+    border-top-color: #4a9eff;
+    border-radius: 50%;
+}
+.timeline li.running .t-label { color: #e6ecff; font-weight: 500; }
+
+.timeline li.success .t-dot {
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.22);
+    color: #6ee7b7;
+}
+.timeline li.success .t-label { color: #d5f5e7; }
+
+.timeline li.failed .t-dot {
+    border-color: #f43f5e;
+    background: rgba(244, 63, 94, 0.22);
+    color: #fda4b0;
+}
+.timeline li.failed .t-label { color: #ffd0d4; }
+
+/* ============================================================
+ * Log
+ * ============================================================ */
+.log-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.log-tools { display: flex; align-items: center; gap: 8px; }
+.chk {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; color: #8f99b8;
+    cursor: pointer;
+    user-select: none;
+}
+.chk input { accent-color: #4a9eff; }
+.icon-btn {
+    width: 30px; height: 30px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(120, 160, 255, 0.08);
+    border: 1px solid rgba(120, 160, 255, 0.15);
+    border-radius: 8px;
+    color: #8f99b8;
+    transition: 0.2s;
+    font-size: 14px;
+}
+.icon-btn:hover { background: rgba(120, 160, 255, 0.18); color: #e6ecff; }
+
+.logbox {
+    position: relative;
+    background: #030510;
+    border: 1px solid rgba(74, 158, 255, 0.12);
+    border-radius: 11px;
+    padding: 14px 16px;
+    height: 360px;
+    overflow-y: auto;
+    font-family: 'JetBrains Mono', 'Consolas', 'Menlo', monospace;
+    font-size: 12px;
+    line-height: 1.75;
+    word-break: break-all;
+}
+.logbox::-webkit-scrollbar { width: 8px; height: 8px; }
+.logbox::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 4px; }
+.logbox::-webkit-scrollbar-thumb { background: rgba(120,160,255,0.25); border-radius: 4px; }
+.logbox::-webkit-scrollbar-thumb:hover { background: rgba(120,160,255,0.4); }
+
+.log-empty {
+    display: flex; align-items: center; justify-content: center;
+    height: 100%; color: #4a5680; font-size: 12.5px;
+    flex-direction: column; gap: 8px;
+}
+.log-empty .emo { font-size: 28px; opacity: 0.5; }
+
+.logline { display: block; }
+.logline .ts { color: #3f4863; margin-right: 8px; }
+.logline .tag {
+    display: inline-block; min-width: 60px; text-align: center;
+    padding: 0 8px; margin-right: 10px;
+    border-radius: 4px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.3px;
+}
+.logline.info .tag { color: #8ec0ff; background: rgba(74,158,255,0.16); }
+.logline.success .tag { color: #6ee7b7; background: rgba(16,185,129,0.18); }
+.logline.warn .tag { color: #fcd34d; background: rgba(245,158,11,0.18); }
+.logline.error .tag { color: #fda4b0; background: rgba(244,63,94,0.2); }
+.logline .msg { color: #cfd7ee; }
+.logline.success .msg { color: #bff4da; }
+.logline.warn .msg { color: #ffe5b2; }
+.logline.error .msg { color: #ffc9ce; }
+
+/* ============================================================
+ * Done Card
+ * ============================================================ */
+.done-card {
+    margin-top: 20px;
+    background:
+        linear-gradient(145deg, rgba(16, 185, 129, 0.14) 0%, rgba(34, 211, 238, 0.08) 50%, rgba(168, 85, 247, 0.12) 100%);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+.done-head {
+    display: flex; align-items: center; gap: 16px;
+    margin-bottom: 18px;
+}
+.done-icon {
+    width: 54px; height: 54px;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, rgba(16,185,129,0.4), rgba(34,211,238,0.3));
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    border-radius: 14px;
+    font-size: 26px;
+    flex-shrink: 0;
+    box-shadow: 0 0 30px rgba(16, 185, 129, 0.25);
+    animation: bounce 1s ease-out 0.1s both;
+}
+.done-head h2 { font-size: 20px; font-weight: 700; color: #f2f5ff; margin-bottom: 4px; }
+.done-head p { font-size: 13px; color: #bcc7e8; }
+
+.url-cards { display: grid; gap: 10px; grid-template-columns: 1fr; }
+@media (min-width: 760px) { .url-cards { grid-template-columns: 1fr 1fr 1fr; } }
+.url-card {
+    padding: 14px;
+    background: rgba(5, 7, 15, 0.5);
+    border: 1px solid rgba(120, 160, 255, 0.18);
+    border-radius: 11px;
+    display: flex; flex-direction: column; gap: 8px;
+    transition: transform 0.15s, border-color 0.2s;
+}
+.url-card:hover { transform: translateY(-2px); border-color: rgba(74, 158, 255, 0.45); }
+.url-card .u-head {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: #8f99b8;
+}
+.url-card .u-port {
+    font-size: 10.5px;
+    padding: 2px 7px;
+    background: rgba(74, 158, 255, 0.15);
+    border-radius: 4px;
+    color: #8ec0ff;
+    font-family: 'JetBrains Mono', monospace;
+}
+.url-card .u-link {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 10px;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(120, 160, 255, 0.12);
+    border-radius: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    color: #c7dcff;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.url-card .u-actions { display: flex; gap: 6px; }
+.u-btn {
+    flex: 1;
+    padding: 7px 10px;
+    border-radius: 8px;
+    font-size: 11.5px;
+    font-weight: 500;
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    transition: 0.2s;
+}
+.u-btn.copy {
+    background: rgba(120, 160, 255, 0.12);
+    color: #8ec0ff;
+    border: 1px solid rgba(120, 160, 255, 0.2);
+}
+.u-btn.copy:hover { background: rgba(120, 160, 255, 0.2); }
+.u-btn.copy.copied { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; border-color: rgba(16,185,129,0.4); }
+.u-btn.open {
+    background: linear-gradient(135deg, #4a9eff, #3d7de8);
+    color: #fff;
+}
+.u-btn.open:hover { background: linear-gradient(135deg, #5aaaff, #4d8df0); }
+
+/* ============================================================
+ * SSH Command Card
+ * ============================================================ */
+.ssh-command-card { overflow: hidden; }
+.command-head { margin-bottom: 16px; }
+.command-list { display: grid; gap: 14px; }
+.command-block {
+    padding: 14px;
+    background: rgba(5, 7, 15, 0.48);
+    border: 1px solid rgba(120, 160, 255, 0.16);
+    border-radius: 12px;
+}
+.command-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.command-label { font-size: 13px; font-weight: 700; color: #e6ecff; }
+.command-note { font-size: 11.5px; color: #8f99b8; }
+.command-code {
+    margin: 0 0 10px;
+    padding: 12px 13px;
+    background: rgba(0, 0, 0, 0.34);
+    border: 1px solid rgba(120, 160, 255, 0.14);
+    border-radius: 10px;
+    overflow-x: auto;
+    white-space: pre;
+}
+.command-code code { display: block; font-size: 12px; line-height: 1.55; color: #c7dcff; }
+.copy-command { width: 100%; }
+.command-extra {
+    margin-top: 12px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+}
+.command-extra span {
+    padding: 8px 10px;
+    background: rgba(74, 158, 255, 0.08);
+    border: 1px solid rgba(74, 158, 255, 0.14);
+    border-radius: 9px;
+    color: #bcc7e8;
+    font-size: 11.5px;
+    text-align: center;
+}
+@media (max-width: 640px) { .command-extra { grid-template-columns: 1fr; } }
+
+/* ============================================================
+ * Footer
+ * ============================================================ */
+.foot {
+    max-width: 1280px;
+    margin: 20px auto;
+    padding: 20px 28px;
+    display: flex; align-items: center; justify-content: space-between;
+    color: #4a5680; font-size: 11.5px;
+    border-top: 1px solid rgba(120, 160, 255, 0.08);
+}
+.foot-links { display: flex; gap: 8px; align-items: center; }
+
+/* ============================================================
+ * Access Code Modal
+ * ============================================================ */
+.modal-mask {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(3, 5, 15, 0.88);
+    backdrop-filter: blur(10px);
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+}
+.modal {
+    width: 100%; max-width: 400px;
+    background: linear-gradient(145deg, rgba(18, 24, 48, 0.95), rgba(12, 16, 36, 0.95));
+    border: 1px solid rgba(74, 158, 255, 0.2);
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.modal h3 {
+    font-size: 17px; font-weight: 700; margin-bottom: 6px;
+    background: linear-gradient(135deg, #8ec0ff, #22d3ee);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+.modal p { color: #8f99b8; font-size: 13px; margin-bottom: 16px; }
+.modal .field { margin-bottom: 12px; }
+.modal .err {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #fda4b0;
+    display: none;
+}
+.modal .err.show { display: block; }
+.access-hint {
+    display: none;
+    margin: -8px 0 14px;
+    color: #6fd3ff;
+    font-size: 12px;
+}
+.access-hint.show { display: block; }
+
+/* ============================================================
+ * Animations
+ * ============================================================ */
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(1.2); }
+}
+@keyframes shimmer {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 200% 50%; }
+}
+@keyframes sweep {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+@keyframes bounce {
+    0% { transform: scale(0.3); opacity: 0; }
+    60% { transform: scale(1.1); opacity: 1; }
+    100% { transform: scale(1); }
+}
+@keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.card { animation: fadeInUp 0.5s ease-out; }
+
+/* ============================================================
+ * Utility
+ * ============================================================ */
+.hidden { display: none !important; }
+.no-select { user-select: none; -webkit-user-select: none; }
+</style>
+</head>
+<body>
+
+<div class="bg-layer"></div>
+<div class="bg-grid"></div>
+
+<header class="appbar">
+    <div class="brand">
+        <div class="brand-logo" aria-hidden="true">
+            <svg viewBox="0 0 64 64">
+                <defs>
+                    <linearGradient id="lg1" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stop-color="#4a9eff"/>
+                        <stop offset="50%" stop-color="#22d3ee"/>
+                        <stop offset="100%" stop-color="#a855f7"/>
+                    </linearGradient>
+                    <radialGradient id="rg1" cx="50%" cy="50%" r="50%">
+                        <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.5"/>
+                        <stop offset="100%" stop-color="#22d3ee" stop-opacity="0"/>
+                    </radialGradient>
+                </defs>
+                <circle cx="32" cy="32" r="28" fill="url(#rg1)"/>
+                <circle cx="32" cy="32" r="26" fill="none" stroke="url(#lg1)" stroke-width="1.5" opacity="0.35"/>
+                <circle class="ring" cx="32" cy="32" r="18" fill="none" stroke="#4a9eff" stroke-width="1.5" stroke-dasharray="4 6" opacity="0.7"/>
+                <circle cx="32" cy="32" r="10" fill="none" stroke="#22d3ee" stroke-width="1.5" opacity="0.8"/>
+                <g class="sweep">
+                    <line x1="32" y1="32" x2="32" y2="6" stroke="url(#lg1)" stroke-width="2" stroke-linecap="round"/>
+                </g>
+                <circle cx="32" cy="32" r="3" fill="#22d3ee"/>
+            </svg>
+        </div>
+        <div class="brand-text">
+            <h1>RadarDeploy</h1>
+            <div class="sub">ONE-CLICK REMOTE DEPLOYMENT</div>
+        </div>
+    </div>
+
+    <nav class="trust-nav">
+        <span class="trust-pill"><span class="ic">🔐</span>SSH 加密传输</span>
+        <span class="trust-pill"><span class="ic">💾</span>密码零落盘</span>
+        <span class="trust-pill"><span class="ic">📜</span>全程日志可审</span>
+    </nav>
+
+    <div class="conn-chip" id="connChip">
+        <span class="dot"></span>
+        <span id="connState">未连接</span>
+    </div>
+</header>
+
+<main class="layout">
+    <div class="grid">
+
+        <!-- ============== LEFT COLUMN ============== -->
+        <div class="col-left">
+
+            <!-- FORM CARD -->
+            <section class="card form-card">
+                <div class="card-head">
+                    <h2><span class="step-badge">01</span> 填写 SSH 凭据</h2>
+                    <p class="tip-text">输入目标服务器 SSH 信息，我们将自动安装环境并部署服务。</p>
+                </div>
+
+                <form id="deployForm" autocomplete="off">
+                    <div class="form-grid">
+                        <div class="field full">
+                            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M22 12a10 10 0 0 0-10-10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z"/></svg>
+                            <input type="text" id="f-host" name="host" placeholder=" " required spellcheck="false" autocapitalize="off">
+                            <label for="f-host">服务器 IP / 域名</label>
+                        </div>
+
+                        <div class="field">
+                            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 10h20"/></svg>
+                            <input type="number" id="f-port" name="port" value="22" min="1" max="65535" placeholder=" " required>
+                            <label for="f-port">SSH 端口</label>
+                        </div>
+
+                        <div class="field">
+                            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/><path d="M7 4l-2 16"/><path d="M17 4l-2 16"/></svg>
+                            <input type="number" id="f-site-port" name="sitePort" value="80" min="1" max="65535" placeholder=" " required>
+                            <label for="f-site-port">网站访问端口</label>
+                        </div>
+
+                        <div class="field">
+                            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                            <input type="text" id="f-user" name="username" value="root" placeholder=" " required spellcheck="false" autocapitalize="off">
+                            <label for="f-user">用户名</label>
+                        </div>
+
+                        <div class="field full">
+                            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                            <input type="password" id="f-pass" name="password" placeholder=" " required autocomplete="new-password">
+                            <label for="f-pass">SSH 登录密码</label>
+                            <button type="button" class="pw-toggle" aria-label="显示密码">
+                                <svg id="pwIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                            </button>
+                        </div>
+
+                        <div class="mode-box">
+                            <div class="mode-title">部署版本</div>
+                            <div class="mode-options">
+                                <label class="mode-option">
+                                    <input type="radio" name="deployMode" value="clean" checked>
+                                    <span><strong>纯净版</strong><span>上传 网页源码/纯净版</span></span>
+                                </label>
+                                <label class="mode-option">
+                                    <input type="radio" name="deployMode" value="card">
+                                    <span><strong>卡密版</strong><span>上传 网页源码/卡密版，带后台管理</span></span>
+                                </label>
+                                <label class="mode-option">
+                                    <input type="radio" name="deployMode" value="ops">
+                                    <span><strong>运营版</strong><span>远程拉取 GitHub/Gitee 源码，不占用部署器本地源码</span></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="field full card-admin-field hidden" id="cardAdminField">
+                            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 4v6c0 5-3 8-7 10-4-2-7-5-7-10V6l7-4z"/><path d="M9 12l2 2 4-4"/></svg>
+                            <input type="password" id="f-card-admin-password" name="cardAdminPassword" placeholder=" " autocomplete="new-password">
+                            <label for="f-card-admin-password">卡密后台管理密码</label>
+                        </div>
+
+                        <div class="ops-config hidden" id="opsConfig">
+                            <div class="mode-title">运营版参数</div>
+                            <div class="ops-grid">
+                                <div class="field">
+                                    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 4v6c0 5-3 8-7 10-4-2-7-5-7-10V6l7-4z"/><path d="M9 12l2 2 4-4"/></svg>
+                                    <input type="password" id="f-ops-install-code" name="opsInstallCode" placeholder=" " autocomplete="new-password">
+                                    <label for="f-ops-install-code">安装授权码</label>
+                                </div>
+                                <div class="field">
+                                    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z"/></svg>
+                                    <input type="text" id="f-ops-server-name" name="opsServerName" value="_" placeholder=" " spellcheck="false" autocapitalize="off">
+                                    <label for="f-ops-server-name">绑定域名（不绑定填 _）</label>
+                                </div>
+                                <div class="field">
+                                    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>
+                                    <input type="password" id="f-ops-db-root-password" name="opsDbRootPassword" placeholder=" " autocomplete="new-password">
+                                    <label for="f-ops-db-root-password">MySQL root 密码（可留空）</label>
+                                </div>
+                                <div class="field">
+                                    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>
+                                    <input type="password" id="f-ops-db-password" name="opsDbPassword" placeholder=" " autocomplete="new-password">
+                                    <label for="f-ops-db-password">数据库密码（留空自动生成）</label>
+                                </div>
+                                <div class="field">
+                                    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                    <input type="text" id="f-ops-admin-user" name="opsAdminUser" value="admin" placeholder=" " spellcheck="false" autocapitalize="off">
+                                    <label for="f-ops-admin-user">后台用户名</label>
+                                </div>
+                                <div class="field">
+                                    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                    <input type="password" id="f-ops-admin-password" name="opsAdminPassword" placeholder=" " autocomplete="new-password">
+                                    <label for="f-ops-admin-password">后台密码（留空自动生成）</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-notes">
+                        <div class="form-note"><span class="bullet">①</span><span>请确认你有<strong style="color:#e6ecff">权限</strong>在该服务器上部署</span></div>
+                        <div class="form-note"><span class="bullet">②</span><span>云控制台"安全组"需放行你选择的网站端口，以及 <code>8888</code> <code>9999</code></span></div>
+                        <div class="form-note"><span class="bullet">③</span><span>支持 CentOS / Rocky / AlmaLinux / Ubuntu / Debian</span></div>
+                    </div>
+
+                    <div class="actions">
+                        <button type="submit" class="deploy-btn" id="btnDeploy">
+                            <span class="btn-icon">🚀</span>
+                            <span class="btn-text">开始一键部署</span>
+                            <span class="btn-arrow">→</span>
+                        </button>
+                        <button type="button" class="ghost-btn" id="btnTestConn">🔗 测试连接</button>
+                        <button type="button" class="ghost-btn" id="btnCancel" disabled>取消任务</button>
+                    </div>
+                    <div id="testResult" class="test-result" style="display:none;"></div>
+                </form>
+            </section>
+
+        </div>
+
+        <!-- ============== RIGHT COLUMN ============== -->
+        <div class="col-right">
+
+            <!-- SSH COMMAND CARD -->
+            <section class="card ssh-command-card">
+                <div class="card-head command-head">
+                    <h2><span class="step-badge">SSH</span> 智能一键命令</h2>
+                    <p class="tip-text">网络好优先走 GitHub，失败自动切换 Gitee，直接复制到 SSH 窗口执行。</p>
+                </div>
+                <div class="command-list">
+                    <div class="command-block">
+                        <div class="command-meta">
+                            <span class="command-label">安装命令</span>
+                            <span class="command-note">首次搭建</span>
+                        </div>
+                        <pre class="command-code"><code id="smartInstallCmd">SRC=github; (curl -fsSL --connect-timeout 8 --max-time 25 https://raw.githubusercontent.com/a534686350/wzry-space/main/scripts/cloud-install.sh -o /tmp/wzry-install.sh || { SRC=gitee; curl -fsSL --connect-timeout 8 --max-time 25 https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-install.sh -o /tmp/wzry-install.sh; }) &amp;&amp; bash /tmp/wzry-install.sh --source &quot;$SRC&quot;</code></pre>
+                        <button type="button" class="u-btn copy copy-command" data-copy-target="smartInstallCmd">复制安装命令</button>
+                    </div>
+                    <div class="command-block">
+                        <div class="command-meta">
+                            <span class="command-label">更新命令</span>
+                            <span class="command-note">后续更新</span>
+                        </div>
+                        <pre class="command-code"><code id="smartUpdateCmd">SRC=github; (curl -fsSL --connect-timeout 8 --max-time 25 https://raw.githubusercontent.com/a534686350/wzry-space/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh || { SRC=gitee; curl -fsSL --connect-timeout 8 --max-time 25 https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh; }) &amp;&amp; bash /tmp/wzry-update.sh --source &quot;$SRC&quot;</code></pre>
+                        <button type="button" class="u-btn copy copy-command" data-copy-target="smartUpdateCmd">复制更新命令</button>
+                    </div>
+                </div>
+                <div class="command-extra">
+                    <span>自动选择 GitHub/Gitee</span>
+                    <span>服务器 SSH 执行</span>
+                    <span>不上传本地源码</span>
+                </div>
+            </section>
+
+            <!-- PROGRESS CARD -->
+            <section class="card progress-card">
+                <div class="card-head">
+                    <div class="progress-header">
+                        <h2><span class="step-badge">02</span> 部署进度</h2>
+                        <div class="progress-percent-big" id="progressPercent">0%</div>
+                    </div>
+                </div>
+                <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+                <div class="progress-text" id="progressText">待机中，填写左侧信息后点击"开始一键部署"</div>
+
+                <ol class="timeline" id="stepsList" style="display:none;"></ol>
+            </section>
+
+            <!-- LOG CARD -->
+            <section class="card log-card">
+                <div class="card-head log-head">
+                    <h2><span class="step-badge">03</span> 实时日志</h2>
+                    <div class="log-tools">
+                        <label class="chk"><input type="checkbox" id="autoScroll" checked>自动滚动</label>
+                        <button type="button" class="icon-btn" id="btnDownloadLog" title="下载日志">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+                        </button>
+                        <button type="button" class="icon-btn" id="btnClearLog" title="清空">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="logbox" id="logbox">
+                    <div class="log-empty" id="logEmpty">
+                        <div class="emo">🛰️</div>
+                        <div>等待部署开始...</div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+
+    </div>
+
+    <!-- DONE MESSAGE -->
+    <div id="doneMsg" style="display:none;text-align:center;padding:20px 0;">
+        <div style="font-size:18px;color:#4ade80;font-weight:600;">✅ 已全部完成部署任务</div>
+        <div id="doneIp" style="margin-top:8px;font-size:14px;color:#6fd3ff;"></div>
+    </div>
+
+</main>
+
+<footer class="foot">
+    <div>© RadarDeploy · 一键远程部署器</div>
+    <div class="foot-links">
+        <span>SSH 加密</span>
+        <span>·</span>
+        <span>密码零落盘</span>
+        <span>·</span>
+        <span>v1.0.0</span>
+    </div>
+</footer>
+
+<!-- Access Code Modal (only shown when server enforces it) -->
+<div class="modal-mask hidden" id="accessModal">
+    <div class="modal">
+        <h3>🔑 需要访问码</h3>
+        <p>部署器已启用访问码保护，请输入访问码以继续使用。</p>
+        <div class="access-hint" id="accessHint"></div>
+        <form id="accessForm" autocomplete="off">
+            <div class="field">
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                <input type="password" id="accessCode" placeholder=" " required autocomplete="new-password">
+                <label for="accessCode">访问码</label>
+            </div>
+            <div class="err" id="accessErr">访问码错误</div>
+            <div class="actions">
+                <button type="submit" class="deploy-btn">
+                    <span>进入</span>
+                    <span class="btn-arrow">→</span>
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/app.js?v=7"></script>
+
+</body>
+</html>
