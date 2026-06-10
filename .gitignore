@@ -12,6 +12,10 @@ APP/wzry_overlay_apk/yuanma/config.php
 APP/auth/install.lock
 网页前后台/auth/install.lock
 
+# ACME challenge files are generated per server
+APP/.well-known/
+网页前后台/.well-known/
+
 # Android/Gradle generated files
 **/.gradle/
 **/build/
@@ -39,3 +43,6 @@ Thumbs.db
 # Python cache
 __pycache__/
 *.pyc
+
+# Local installer secrets
+.install-code.txt
