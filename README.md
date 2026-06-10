@@ -55,6 +55,16 @@ powershell -ExecutionPolicy Bypass -File ".\sync-remotes.ps1" -BuildApk -CommitM
 
 脚本会先推送 Gitee，再推送 GitHub；如果 GitHub 普通 `git push` 因网络失败，会自动改用 GitHub Git Data API 同步内容。
 
+## 云服务器 SSH 一键搭建
+
+一键安装脚本位于 `scripts/cloud-install.sh`，完整教程见 `CLOUD_INSTALL.md`。
+
+服务器 SSH 里执行后一切按提示填写，包含授权码、域名、数据库密码、后台账号密码：
+
+```bash
+curl -fsSL https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-install.sh -o /tmp/wzry-install.sh && bash /tmp/wzry-install.sh
+```
+
 ## 远程更新
 
 后台的 APP 远程管理支持配置：
