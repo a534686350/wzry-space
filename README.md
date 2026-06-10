@@ -65,6 +65,12 @@ powershell -ExecutionPolicy Bypass -File ".\sync-remotes.ps1" -BuildApk -CommitM
 curl -fsSL https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-install.sh -o /tmp/wzry-install.sh && bash /tmp/wzry-install.sh
 ```
 
+服务器后续 SSH 远程更新源码：
+
+```bash
+curl -fsSL https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh && bash /tmp/wzry-update.sh
+```
+
 ## 远程更新
 
 后台的 APP 远程管理支持配置：

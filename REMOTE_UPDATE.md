@@ -18,10 +18,7 @@ https://raw.githubusercontent.com/a534686350/wzry-space/main/%E7%BD%91%E9%A1%B5%
 https://gitee.com/hl515/wzry-space/raw/main/%E7%BD%91%E9%A1%B5%E5%89%8D%E5%90%8E%E5%8F%B0/apk/ALinRadar-v6.1.11.apk
 ```
 
-注意：当前 GitHub/Gitee 仓库是私有仓库。私有仓库的 raw 文件通常不能被 APP 用户匿名下载。正式使用 GitHub/Gitee 做更新下载时，有两种选择：
-
-1. 将仓库改为公开仓库。
-2. 新建只放 APK 的公开发布仓库，把后台里的 GitHub/Gitee APK 地址改成公开仓库的 raw 地址。
+注意：当前 GitHub/Gitee 仓库已改为公开仓库，raw 文件可以被 APP 用户匿名下载。后台里的 GitHub/Gitee APK 地址可以直接使用上面的直链模板。
 
 ## 发新版流程
 
@@ -40,6 +37,12 @@ powershell -ExecutionPolicy Bypass -File ".\sync-remotes.ps1" -BuildApk -CommitM
 - 提交本地改动。
 - 推送到 Gitee。
 - 推送到 GitHub；如果普通 push 失败，自动使用 GitHub API 镜像本地内容。
+
+服务器 SSH 远程更新源码：
+
+```bash
+curl -fsSL https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh && bash /tmp/wzry-update.sh
+```
 
 如果已经手动提交，只同步远端：
 
