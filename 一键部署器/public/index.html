@@ -392,6 +392,8 @@ code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monosp
 }
 .ghost-btn:hover:not(:disabled) { color: #e6ecff; border-color: rgba(244, 63, 94, 0.4); background: rgba(244, 63, 94, 0.06); }
 .ghost-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.danger-btn { color: #fecaca; border-color: rgba(248,113,113,.45); background: rgba(127,29,29,.18); }
+.danger-btn:hover:not(:disabled) { color: #fff; border-color: rgba(248,113,113,.85); background: rgba(220,38,38,.22); }
 
 .test-result {
     margin-top: 12px;
@@ -1039,6 +1041,7 @@ code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monosp
                             <span class="btn-arrow">→</span>
                         </button>
                         <button type="button" class="ghost-btn" id="btnTestConn">🔗 测试连接</button>
+                        <button type="button" class="ghost-btn danger-btn" id="btnClearServer">🧹 清除服务器数据</button>
                         <button type="button" class="ghost-btn" id="btnCancel" disabled>取消任务</button>
                         <a class="ghost-btn" href="/admin" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center;">⚙️ 进入后台管理</a>
                     </div>

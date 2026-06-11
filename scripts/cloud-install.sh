@@ -21,6 +21,10 @@ DB_PASSWORD="${DB_PASSWORD:-}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 RESET_ADMIN_KEY="${RESET_ADMIN_KEY:-}"
+LICENSE_SERVER="${LICENSE_SERVER:-http://ld.llqq520.xyz}"
+LICENSE_GROUP_URL="${LICENSE_GROUP_URL:-https://qm.qq.com/q/VcaTE1qumQ}"
+LICENSE_HOST="${LICENSE_HOST:-}"
+LICENSE_PERMANENT="${LICENSE_PERMANENT:-0}"
 REPO_URL="${REPO_URL:-}"
 SKIP_SERVICES=0
 SKIP_DB=0
@@ -55,6 +59,10 @@ usage() {
   --db-password PASS           数据库密码；不传则交互输入或自动生成
   --admin-user NAME            后台用户名，默认 admin
   --admin-password PASS        后台密码；不传则交互输入或自动生成
+  --license-server URL         授权服务器地址，默认 http://ld.llqq520.xyz
+  --license-host HOST          授权绑定 IP/域名，默认自动识别服务器 IP
+  --license-group-url URL      未授权提示里的群链接
+  --license-permanent          写入本地永久授权
   --reinstall-db               强制重新导入数据库和重建后台账号
   --skip-db                    跳过数据库初始化
   --skip-services              跳过 Java/WebSocket 服务
@@ -97,6 +105,13 @@ while [[ $# -gt 0 ]]; do
         --admin-password=*) ADMIN_PASSWORD="${1#*=}"; shift ;;
         --reset-admin-key) RESET_ADMIN_KEY="${2:-}"; shift 2 ;;
         --reset-admin-key=*) RESET_ADMIN_KEY="${1#*=}"; shift ;;
+        --license-server) LICENSE_SERVER="${2:-}"; shift 2 ;;
+        --license-server=*) LICENSE_SERVER="${1#*=}"; shift ;;
+        --license-host) LICENSE_HOST="${2:-}"; shift 2 ;;
+        --license-host=*) LICENSE_HOST="${1#*=}"; shift ;;
+        --license-group-url) LICENSE_GROUP_URL="${2:-}"; shift 2 ;;
+        --license-group-url=*) LICENSE_GROUP_URL="${1#*=}"; shift ;;
+        --license-permanent) LICENSE_PERMANENT=1; shift ;;
         --skip-db) SKIP_DB=1; shift ;;
         --skip-services) SKIP_SERVICES=1; shift ;;
         --reinstall-db) REINSTALL_DB=1; shift ;;
@@ -423,7 +438,95 @@ deploy_web_files() {
 
     chmod +x "$SITE_DIR"/*.sh 2>/dev/null || true
     mkdir -p "$SITE_DIR/logs"
+    install_license_runtime
     green "前端搭建完成"
+}
+
+json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+sed_replacement_escape() {
+    printf '%s' "$1" | sed 's/[\\&|]/\\&/g'
+}
+
+license_host_value() {
+    if [[ -n "$LICENSE_HOST" ]]; then
+        printf '%s\n' "$LICENSE_HOST"
+        return
+    fi
+    hostname -I 2>/dev/null | awk '{print $1}'
+}
+
+inject_license_tag() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    grep -q 'radar-license.js' "$file" && return 0
+    if grep -qi '</body>' "$file"; then
+        sed -i '0,/<\/body>/I{s#</body>#<script src="/radar-license.js?v=20260611"></script>\n</body>#}' "$file"
+    else
+        printf '\n<script src="/radar-license.js?v=20260611"></script>\n' >> "$file"
+    fi
+}
+
+install_license_runtime() {
+    local license_file host server group permanent
+    license_file="$SITE_DIR/radar-license.js"
+    host="$(license_host_value)"
+    server="${LICENSE_SERVER%/}"
+    group="$LICENSE_GROUP_URL"
+    permanent="$LICENSE_PERMANENT"
+
+    if [[ "$permanent" == "1" ]]; then
+        cat > "$license_file" <<'EOF'
+(function(){'use strict';
+var host="__RADAR_LICENSE_HOST__";
+window.RadarServerLicense={check:function(){return Promise.resolve(true);},isAuthorized:function(){return true;},last:function(){return {permanent:true,local:true};},showBlock:function(){}};
+try{localStorage.setItem('wzry.server.license.permanent.'+host,'1');}catch(e){}
+})();
+EOF
+        sed -i "s|__RADAR_LICENSE_HOST__|$(sed_replacement_escape "$(json_escape "$host")")|g" "$license_file"
+        chmod 644 "$license_file"
+        inject_license_tag "$SITE_DIR/index.html"
+        inject_license_tag "$SITE_DIR/index.php"
+        green "服务器已写入本地永久授权，不依赖远程授权服务器"
+        return
+    fi
+
+    cat > "$license_file" <<'EOF'
+(function(){'use strict';
+var cfg={serverUrl:"__RADAR_LICENSE_SERVER__",host:"__RADAR_LICENSE_HOST__",mode:"ops",permanent:__RADAR_LICENSE_PERMANENT__,groupUrl:"__RADAR_LICENSE_GROUP_URL__",groupName:"王者雷达共享开黑组队群"};
+var nativeInitApp=null,nativeInitWebSocket=null,authorized=!!cfg.permanent,trialOpen=false,checking=null,lastResult=null;
+var baseKey='wzry.server.license.'+(cfg.host||location.hostname||'server'),storageKey=baseKey+'.permanent',trialKey=baseKey+'.trialStart',trialMs=24*60*60*1000;
+function readPermanent(){try{return localStorage.getItem(storageKey)==='1';}catch(e){return false;}}
+function savePermanent(){try{localStorage.setItem(storageKey,'1');}catch(e){}}
+function trialStart(){var now=Date.now();try{var old=Number(localStorage.getItem(trialKey)||0);if(!old){localStorage.setItem(trialKey,String(now));return now;}return old;}catch(e){return now;}}
+function trialLeft(){return Math.max(0,trialMs-(Date.now()-trialStart()));}
+if(readPermanent())authorized=true;
+function esc(s){return String(s||'').replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function closeSocket(){try{if(window.socket&&window.socket.readyState!==3)window.socket.close();}catch(e){}}
+function removeNotice(){var old=document.getElementById('radarLicenseNotice');if(old)old.remove();}
+function showTrialNotice(message){trialOpen=true;var hours=Math.max(0,Math.ceil(trialLeft()/3600000));var old=document.getElementById('radarLicenseNotice');if(!old){old=document.createElement('div');old.id='radarLicenseNotice';old.style.cssText='position:fixed;left:12px;right:12px;top:12px;z-index:2147483000;background:rgba(15,23,42,.92);border:1px solid rgba(251,191,36,.55);border-radius:10px;color:#f8fafc;padding:10px 12px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif;font-size:13px;line-height:1.5;box-shadow:0 10px 28px rgba(0,0,0,.28);';document.body.appendChild(old);}old.innerHTML='当前服务器未授权，已开启 1 天试用，剩余约 <b style="color:#fde68a">'+hours+'</b> 小时。'+esc(message||'试用结束前请联系管理员授权。')+' <a href="'+esc(cfg.groupUrl||'#')+'" target="_blank" rel="noopener" style="color:#7dd3fc;font-weight:700">加入群聊找授权码</a>';return true;}
+function block(message){authorized=false;closeSocket();try{if(typeof window.updateConnectionStatus==='function')window.updateConnectionStatus('error','服务器未授权');}catch(e){}try{if(typeof window.showError==='function')window.showError('当前服务器未授权，请找管理员开通授权',10000);}catch(e){}var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();var box=document.createElement('div');box.id='radarLicenseBlocker';box.style.cssText='position:fixed;inset:0;z-index:2147483647;background:rgba(4,8,18,.92);display:flex;align-items:center;justify-content:center;padding:18px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif;color:#e8eefc;';box.innerHTML='<div style="width:min(520px,94vw);background:#111827;border:1px solid rgba(96,165,250,.35);border-radius:14px;padding:24px;box-shadow:0 24px 70px rgba(0,0,0,.45);text-align:center"><h2 style="margin:0 0 12px;font-size:24px;color:#fef3c7">试用已结束，需要授权</h2><p style="margin:0 0 18px;line-height:1.7;color:#cbd5e1">'+esc(message||'未授权试用期为 1 天，试用结束后需要授权才能继续使用。')+'</p><p style="margin:0 0 20px;line-height:1.7;color:#dbeafe">请点击链接加入群聊【'+esc(cfg.groupName||'王者雷达共享开黑组队群')+'】，找我获取授权码。</p><a href="'+esc(cfg.groupUrl||'#')+'" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;justify-content:center;height:42px;padding:0 18px;border-radius:8px;background:#38bdf8;color:#06111f;font-weight:800;text-decoration:none">加入群聊找授权码</a></div>';document.body.appendChild(box);return false;}
+function allow(data){authorized=true;trialOpen=false;lastResult=data||{};var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();removeNotice();if(data&&data.permanent)savePermanent();return true;}
+function allowTrial(data){lastResult=data||{};if(trialLeft()>0)return showTrialNotice(data&&data.message?data.message:'试用结束前请联系管理员授权。');return block(data&&data.message?data.message:'未授权试用已结束，需要授权后才能继续使用。');}
+function checkLicense(force){if(authorized&&!force)return Promise.resolve(true);if(cfg.permanent||readPermanent())return Promise.resolve(allow({permanent:true,local:true}));if(checking)return checking;var url=String(cfg.serverUrl||'').replace(/\/+$/,'')+'/api/license/check?host='+encodeURIComponent(cfg.host||location.hostname||'')+'&domain='+encodeURIComponent(location.hostname||'')+'&mode='+encodeURIComponent(cfg.mode||'all')+'&_='+(Date.now());checking=fetch(url,{cache:'no-store'}).then(function(r){return r.json();}).then(function(data){checking=null;if(data&&data.authorized)return allow(data);return allowTrial(data||{});}).catch(function(){checking=null;return allowTrial({message:'授权服务器暂时连接失败，试用期内仍可使用；请尽快联系管理员授权。'});});return checking;}
+function gated(fn,ctx,args){if(authorized||trialOpen||cfg.permanent||readPermanent()||trialLeft()>0)return fn.apply(ctx,args);checkLicense(false).then(function(ok){if(ok)return fn.apply(ctx,args);});return undefined;}
+function wrap(){if(typeof window.initApp==='function'&&!window.initApp.__licenseWrapped){nativeInitApp=window.initApp;window.initApp=function(){return gated(nativeInitApp,this,arguments);};window.initApp.__licenseWrapped=true;}if(typeof window.initWebSocket==='function'&&!window.initWebSocket.__licenseWrapped){nativeInitWebSocket=window.initWebSocket;window.initWebSocket=function(){return gated(nativeInitWebSocket,this,arguments);};window.initWebSocket.__licenseWrapped=true;}}
+wrap();setTimeout(wrap,0);document.addEventListener('DOMContentLoaded',function(){wrap();checkLicense(false);});if(!cfg.permanent){setInterval(function(){checkLicense(true);},60000);setInterval(function(){if(!authorized&&trialLeft()<=0)block('未授权试用已结束，需要授权后才能继续使用。');else if(!authorized)showTrialNotice('试用结束前请联系管理员授权。');},300000);}
+window.RadarServerLicense={check:checkLicense,isAuthorized:function(){return authorized;},last:function(){return lastResult;},showBlock:block};
+})();
+EOF
+    sed -i \
+        -e "s|__RADAR_LICENSE_SERVER__|$(sed_replacement_escape "$(json_escape "$server")")|g" \
+        -e "s|__RADAR_LICENSE_HOST__|$(sed_replacement_escape "$(json_escape "$host")")|g" \
+        -e "s|__RADAR_LICENSE_GROUP_URL__|$(sed_replacement_escape "$(json_escape "$group")")|g" \
+        -e "s|__RADAR_LICENSE_PERMANENT__|$( [[ "$permanent" == "1" ]] && printf true || printf false )|g" \
+        "$license_file"
+    chmod 644 "$license_file"
+    inject_license_tag "$SITE_DIR/index.html"
+    inject_license_tag "$SITE_DIR/index.php"
+    green "服务器授权校验已写入，未授权可试用 1 天"
 }
 
 sql_escape() {
@@ -773,6 +876,10 @@ DB_USER=$DB_USER
 DB_PASSWORD=$DB_PASSWORD
 ADMIN_USER=$ADMIN_USER
 ADMIN_PASSWORD=$ADMIN_PASSWORD
+LICENSE_SERVER=$LICENSE_SERVER
+LICENSE_GROUP_URL=$LICENSE_GROUP_URL
+LICENSE_HOST=$(license_host_value)
+LICENSE_PERMANENT=$LICENSE_PERMANENT
 EOF
     chmod 600 "$receipt"
 }

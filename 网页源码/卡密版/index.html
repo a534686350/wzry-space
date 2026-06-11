@@ -1,0 +1,3019 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WZ雷达 - 王者荣耀</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%81%3C/text%3E%3C/svg%3E">
+    <style>
+        /* 全局样式 */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: 
+                linear-gradient(135deg, #0a0e27 0%, #1a1f3a 25%, #0f1419 50%, #1a1f3a 75%, #0a0e27 100%);
+            background-size: 400% 400%;
+            background-attachment: fixed;
+            animation: gradientShift 15s ease infinite;
+            color: #e0e0e0;
+            line-height: 1.6;
+            overflow-x: hidden;
+            min-height: 100vh;
+            position: relative;
+        }
+        
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        
+        /* 背景装饰效果 - 多层光晕 */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                radial-gradient(circle at 20% 30%, rgba(74, 158, 255, 0.15) 0%, transparent 40%),
+                radial-gradient(circle at 80% 70%, rgba(255, 68, 68, 0.12) 0%, transparent 40%),
+                radial-gradient(circle at 50% 50%, rgba(22, 183, 119, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 10% 80%, rgba(138, 43, 226, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 90% 20%, rgba(255, 165, 0, 0.08) 0%, transparent 40%);
+            pointer-events: none;
+            z-index: 0;
+            animation: glowPulse 8s ease-in-out infinite;
+        }
+        
+        @keyframes glowPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        /* 动态星空背景 */
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                radial-gradient(2px 2px at 20% 30%, white, transparent),
+                radial-gradient(2px 2px at 60% 70%, white, transparent),
+                radial-gradient(1px 1px at 50% 50%, white, transparent),
+                radial-gradient(1px 1px at 80% 10%, white, transparent),
+                radial-gradient(2px 2px at 90% 60%, white, transparent),
+                radial-gradient(1px 1px at 33% 80%, white, transparent),
+                radial-gradient(1px 1px at 15% 50%, white, transparent),
+                radial-gradient(2px 2px at 70% 30%, white, transparent),
+                radial-gradient(1px 1px at 40% 20%, white, transparent),
+                radial-gradient(1px 1px at 25% 90%, white, transparent),
+                radial-gradient(2px 2px at 85% 80%, white, transparent),
+                radial-gradient(1px 1px at 55% 40%, white, transparent),
+                radial-gradient(1px 1px at 10% 10%, white, transparent),
+                radial-gradient(2px 2px at 75% 50%, white, transparent),
+                radial-gradient(1px 1px at 95% 30%, white, transparent);
+            background-repeat: repeat;
+            background-size: 200px 200px;
+            opacity: 0.4;
+            pointer-events: none;
+            z-index: 0;
+            animation: twinkle 3s ease-in-out infinite;
+        }
+        
+        @keyframes twinkle {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 0.6; }
+        }
+        
+        .container {
+            position: relative;
+            z-index: 1;
+        }
+        
+        /* 动态光效装饰 */
+        .bg-decoration {
+            position: fixed;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            z-index: 0;
+            overflow: hidden;
+        }
+        
+        .bg-decoration::before,
+        .bg-decoration::after {
+            content: '';
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(80px);
+            animation: float 20s ease-in-out infinite;
+        }
+        
+        .bg-decoration::before {
+            width: 500px;
+            height: 500px;
+            background: radial-gradient(circle, rgba(74, 158, 255, 0.3) 0%, transparent 70%);
+            top: -250px;
+            left: -250px;
+            animation-delay: 0s;
+        }
+        
+        .bg-decoration::after {
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(255, 68, 68, 0.2) 0%, transparent 70%);
+            bottom: -300px;
+            right: -300px;
+            animation-delay: 10s;
+        }
+        
+        @keyframes float {
+            0%, 100% {
+                transform: translate(0, 0) scale(1);
+            }
+            33% {
+                transform: translate(100px, -100px) scale(1.1);
+            }
+            66% {
+                transform: translate(-100px, 100px) scale(0.9);
+            }
+        }
+        
+        /* 主容器 */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            min-height: 100vh;
+        }
+        
+        /* 头部 */
+        .header {
+            grid-column: 1 / -1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: linear-gradient(135deg, rgba(47, 54, 60, 0.95) 0%, rgba(26, 31, 36, 0.95) 100%);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(74, 158, 255, 0.2);
+            border-radius: 16px;
+            padding: 20px 25px;
+            margin-bottom: 10px;
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.4),
+                0 0 0 1px rgba(74, 158, 255, 0.1),
+                inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(74, 158, 255, 0.1), transparent);
+            transition: left 0.5s;
+        }
+        
+        .header:hover::before {
+            left: 100%;
+        }
+        
+        .header:hover {
+            box-shadow: 
+                0 12px 40px rgba(0, 0, 0, 0.5),
+                0 0 0 1px rgba(74, 158, 255, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1),
+                0 0 60px rgba(74, 158, 255, 0.2);
+            transform: translateY(-2px);
+            border-color: rgba(74, 158, 255, 0.4);
+        }
+        
+        .header h1 {
+            color: #fff;
+            font-size: 24px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #ffffff 0%, #4a9eff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-shadow: 0 0 30px rgba(74, 158, 255, 0.5);
+            letter-spacing: 0.5px;
+        }
+        
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+            color: #999;
+        }
+        
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #4a9eff;
+            box-shadow: 0 0 10px rgba(74, 158, 255, 0.8), 0 0 20px rgba(74, 158, 255, 0.4);
+            animation: pulse 2s ease-in-out infinite;
+            position: relative;
+        }
+        
+        .status-indicator::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: inherit;
+            opacity: 0.6;
+            animation: ripple 2s ease-out infinite;
+        }
+        
+        .status-indicator.disconnected {
+            background: #ff4444;
+            box-shadow: 0 0 10px rgba(255, 68, 68, 0.8), 0 0 20px rgba(255, 68, 68, 0.4);
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
+        @keyframes ripple {
+            0% {
+                transform: translate(-50%, -50%) scale(1);
+                opacity: 0.6;
+            }
+            100% {
+                transform: translate(-50%, -50%) scale(2);
+                opacity: 0;
+            }
+        }
+        
+        /* 雷达地图 */
+        .radar {
+            background: linear-gradient(135deg, rgba(47, 54, 60, 0.95) 0%, rgba(26, 31, 36, 0.95) 100%);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(74, 158, 255, 0.2);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.4),
+                0 0 0 1px rgba(74, 158, 255, 0.1),
+                inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .radar::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: radial-gradient(circle at center, rgba(74, 158, 255, 0.05) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        
+        .radar:hover {
+            box-shadow: 
+                0 12px 40px rgba(0, 0, 0, 0.5),
+                0 0 0 1px rgba(74, 158, 255, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1),
+                0 0 60px rgba(74, 158, 255, 0.2);
+            transform: translateY(-2px);
+            border-color: rgba(74, 158, 255, 0.4);
+        }
+        
+        canvas {
+            /* 动态尺寸，根据map文件自适应 */
+            width: 100%;
+            height: auto;
+            max-width: 100%;
+            max-height: 100%;
+            background: url('map.png') no-repeat center center;
+            background-size: contain;
+            background-position: center;
+            border-radius: 12px;
+            display: block;
+            margin: 0 auto;
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+            object-fit: contain;
+            box-shadow: 
+                0 8px 24px rgba(0, 0, 0, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(74, 158, 255, 0.2);
+            transition: all 0.3s ease;
+        }
+        
+        canvas:hover {
+            box-shadow: 
+                0 12px 32px rgba(0, 0, 0, 0.4),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1),
+                0 0 40px rgba(74, 158, 255, 0.2);
+            border-color: rgba(74, 158, 255, 0.4);
+        }
+        
+        /* 侧边栏 */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        /* 面板样式 */
+        .panel {
+            background: linear-gradient(135deg, rgba(47, 54, 60, 0.95) 0%, rgba(26, 31, 36, 0.95) 100%);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(74, 158, 255, 0.2);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.4),
+                0 0 0 1px rgba(74, 158, 255, 0.1),
+                inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .panel::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, rgba(74, 158, 255, 0.5), transparent);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .panel:hover::before {
+            opacity: 1;
+        }
+        
+        .panel:hover {
+            box-shadow: 
+                0 12px 40px rgba(0, 0, 0, 0.5),
+                0 0 0 1px rgba(74, 158, 255, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1),
+                0 0 60px rgba(74, 158, 255, 0.2);
+            transform: translateY(-2px);
+            border-color: rgba(74, 158, 255, 0.4);
+        }
+        
+        .panel h3 {
+            margin-bottom: 18px;
+            font-size: 18px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #4a9eff 0%, #6bb6ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            border-bottom: 2px solid rgba(74, 158, 255, 0.3);
+            padding-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        /* 列表项 */
+        .list {
+            list-style: none;
+            max-height: 250px;
+            overflow-y: auto;
+        }
+        
+        .list-item {
+            padding: 12px 15px;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, rgba(51, 51, 51, 0.8) 0%, rgba(40, 40, 40, 0.8) 100%);
+            backdrop-filter: blur(10px);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background-color 0.2s ease, box-shadow 0.2s ease, border-left-color 0.2s ease;
+            border-left: 3px solid #4a9eff;
+            color: #e0e0e0;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            position: relative;
+            overflow: hidden;
+            will-change: auto; /* 优化渲染性能 */
+            max-width: 100%;
+            width: 100%;
+            box-sizing: border-box;
+            word-break: break-all;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            overflow: hidden;
+        }
+        
+        .list-item::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(74, 158, 255, 0.1), transparent);
+            transition: left 0.5s;
+            pointer-events: none;
+        }
+        
+        .list-item:hover::before {
+            left: 100%;
+        }
+        
+        .list-item:hover {
+            background: linear-gradient(135deg, rgba(74, 158, 255, 0.15) 0%, rgba(58, 58, 58, 0.8) 100%);
+            box-shadow: 0 4px 12px rgba(74, 158, 255, 0.3);
+            border-left-color: #6bb6ff;
+        }
+        
+        .list-item.active {
+            background: linear-gradient(135deg, rgba(74, 158, 255, 0.25) 0%, rgba(74, 158, 255, 0.15) 100%);
+            border-left-color: #6bb6ff;
+            box-shadow: 0 4px 16px rgba(74, 158, 255, 0.4), inset 0 0 20px rgba(74, 158, 255, 0.1);
+        }
+        
+        /* 英雄信息 */
+        .hero-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px;
+            background: #333;
+            border-radius: 4px;
+            margin-bottom: 6px;
+            transition: all 0.2s ease;
+        }
+        
+        .hero-item:hover {
+            background: #3a3a3a;
+        }
+        
+        .hero-item.enemy {
+            border-left: 3px solid #ff4444;
+        }
+        
+        .hero-item.ally {
+            border-left: 3px solid #4a9eff;
+        }
+        
+        .hero-avatar {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border: 2px solid #4a9eff;
+            object-fit: cover;
+        }
+        
+        .hero-item.enemy .hero-avatar {
+            border-color: #ff4444;
+        }
+        
+        .hero-info {
+            flex: 1;
+            font-size: 12px;
+        }
+        
+        .hero-info span {
+            margin-right: 8px;
+            color: #999;
+        }
+        
+        /* 连接控制 */
+        .connect-control {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .connect-control input {
+            flex: 1;
+            padding: 12px 15px;
+            background: rgba(47, 54, 60, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(74, 158, 255, 0.3);
+            border-radius: 10px;
+            color: #fff;
+            font-size: 14px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+        
+        .connect-control input::placeholder {
+            color: rgba(255, 255, 255, 0.4);
+        }
+        
+        .connect-control input:focus {
+            outline: none;
+            border-color: #4a9eff;
+            background: rgba(47, 54, 60, 0.95);
+            box-shadow: 
+                0 0 0 3px rgba(74, 158, 255, 0.2),
+                0 4px 12px rgba(74, 158, 255, 0.3);
+            transform: translateY(-1px);
+        }
+        .connect-control button {
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #4a9eff 0%, #258DF2 100%);
+            border: none;
+            border-radius: 10px;
+            color: #fff;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 14px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 12px rgba(74, 158, 255, 0.4);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .connect-control button::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+        
+        .connect-control button:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+        
+        .connect-control button:hover {
+            background: linear-gradient(135deg, #6bb6ff 0%, #4a9eff 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(74, 158, 255, 0.5);
+        }
+        
+        .connect-control button:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 8px rgba(74, 158, 255, 0.4);
+        }
+        
+        .disconnect-btn {
+            background: linear-gradient(135deg, #ff4444 0%, #ee3333 100%) !important;
+            box-shadow: 0 4px 12px rgba(255, 68, 68, 0.4) !important;
+        }
+        
+        .disconnect-btn:hover {
+            background: linear-gradient(135deg, #ff6666 0%, #ff4444 100%) !important;
+            box-shadow: 0 6px 20px rgba(255, 68, 68, 0.5) !important;
+        }
+        
+        /* 消息提示 */
+        .message {
+            padding: 12px 15px;
+            margin-top: 10px;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: 500;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            animation: slideInDown 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .message::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: inherit;
+        }
+        
+        .message.error {
+            background: linear-gradient(135deg, rgba(255, 68, 68, 0.15) 0%, rgba(255, 68, 68, 0.08) 100%);
+            border: 1px solid rgba(255, 68, 68, 0.4);
+            border-left: 4px solid #ff4444;
+            color: #ff6666;
+            box-shadow: 0 4px 12px rgba(255, 68, 68, 0.2);
+        }
+        
+        .message.success {
+            background: linear-gradient(135deg, rgba(74, 158, 255, 0.15) 0%, rgba(74, 158, 255, 0.08) 100%);
+            border: 1px solid rgba(74, 158, 255, 0.4);
+            border-left: 4px solid #4a9eff;
+            color: #6bb6ff;
+            box-shadow: 0 4px 12px rgba(74, 158, 255, 0.2);
+        }
+        
+        @keyframes slideInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .container {
+                grid-template-columns: 1fr;
+                padding: 10px;
+            }
+            
+            .header {
+                flex-direction: column;
+                gap: 10px;
+                text-align: center;
+            }
+            
+            .sidebar {
+                gap: 10px;
+            }
+        }
+        
+        /* Canvas旋转样式 */
+        .rotate0{transform: rotate(0deg);}
+        .rotate180{transform: rotate(180deg);}
+
+        /* 雷达地图定位 */
+        .radar {
+            position: relative;
+        }
+
+        /* 头部标题图标 */
+        .header-icon {
+            font-size: 28px;
+            margin-right: 10px;
+            filter: drop-shadow(0 0 8px rgba(74, 158, 255, 0.6));
+        }
+
+        /* 版本标签 */
+        .version-tag {
+            font-size: 11px;
+            color: rgba(74, 158, 255, 0.6);
+            background: rgba(74, 158, 255, 0.1);
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-left: 10px;
+            font-weight: 400;
+            letter-spacing: 0.5px;
+        }
+        
+        /* 滚动条 */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #1a1a1a;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        
+        /* 提示弹窗样式 */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 10000;
+            justify-content: center;
+            align-items: center;
+            animation: fadeIn 0.3s ease;
+        }
+        
+        .modal-overlay.show {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: linear-gradient(135deg, rgba(47, 54, 60, 0.98) 0%, rgba(26, 31, 36, 0.98) 100%);
+            backdrop-filter: blur(30px);
+            -webkit-backdrop-filter: blur(30px);
+            border-radius: 20px;
+            padding: 35px 45px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 
+                0 20px 60px rgba(0, 0, 0, 0.6),
+                0 0 0 1px rgba(74, 158, 255, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            text-align: center;
+            animation: slideUp 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            border: 1px solid rgba(74, 158, 255, 0.4);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .modal-content::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(74, 158, 255, 0.1) 0%, transparent 70%);
+            animation: rotate 20s linear infinite;
+        }
+        
+        @keyframes rotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        
+        .modal-content h2 {
+            background: linear-gradient(135deg, #4a9eff 0%, #6bb6ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-size: 24px;
+            margin-bottom: 20px;
+            font-weight: 600;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .modal-content p {
+            color: #e0e0e0;
+            font-size: 16px;
+            line-height: 1.8;
+            margin-bottom: 25px;
+        }
+        
+        .modal-content .group-info {
+            background: rgba(74, 158, 255, 0.1);
+            border: 1px solid rgba(74, 158, 255, 0.3);
+            border-radius: 6px;
+            padding: 15px;
+            margin: 20px 0;
+            font-size: 18px;
+            color: #4a9eff;
+            font-weight: bold;
+            word-break: break-all;
+        }
+        
+        .modal-close-btn {
+            background: linear-gradient(135deg, #4a9eff 0%, #258DF2 100%);
+            border: none;
+            border-radius: 10px;
+            padding: 12px 35px;
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            font-weight: 500;
+            box-shadow: 0 4px 12px rgba(74, 158, 255, 0.4);
+            position: relative;
+            z-index: 1;
+            overflow: hidden;
+        }
+        
+        .modal-close-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+        
+        .modal-close-btn:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+        
+        .modal-close-btn:hover {
+            background: linear-gradient(135deg, #6bb6ff 0%, #4a9eff 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(74, 158, 255, 0.5);
+        }
+        
+        .modal-close-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 8px rgba(74, 158, 255, 0.4);
+        }
+        
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+        
+        @keyframes slideUp {
+            from {
+                transform: translateY(30px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        
+        /* 密码按钮样式 */
+        .password-btn {
+            background: linear-gradient(135deg, #4a9eff 0%, #258DF2 100%);
+            border: none;
+            border-radius: 8px;
+            padding: 6px 14px;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            margin-left: 10px;
+            box-shadow: 0 2px 8px rgba(74, 158, 255, 0.3);
+        }
+        
+        .password-btn:hover {
+            background: linear-gradient(135deg, #6bb6ff 0%, #4a9eff 100%);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(74, 158, 255, 0.5);
+        }
+        
+        .password-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 6px rgba(74, 158, 255, 0.3);
+        }
+        
+        /* 密码输入模态框 */
+        .password-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 10001;
+            justify-content: center;
+            align-items: center;
+            animation: fadeIn 0.3s ease;
+        }
+        
+        .password-modal.show {
+            display: flex;
+        }
+        
+        .password-modal-content {
+            background: linear-gradient(135deg, rgba(47, 54, 60, 0.98) 0%, rgba(26, 31, 36, 0.98) 100%);
+            backdrop-filter: blur(30px);
+            -webkit-backdrop-filter: blur(30px);
+            border-radius: 20px;
+            padding: 35px 45px;
+            max-width: 350px;
+            width: 90%;
+            box-shadow: 
+                0 20px 60px rgba(0, 0, 0, 0.6),
+                0 0 0 1px rgba(74, 158, 255, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            text-align: center;
+            animation: slideUp 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            border: 1px solid rgba(74, 158, 255, 0.4);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .password-modal-content::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(74, 158, 255, 0.1) 0%, transparent 70%);
+            animation: rotate 20s linear infinite;
+        }
+        
+        .password-modal-content h2 {
+            background: linear-gradient(135deg, #4a9eff 0%, #6bb6ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-size: 22px;
+            margin-bottom: 20px;
+            font-weight: 600;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .password-input-group {
+            margin-bottom: 20px;
+        }
+        
+        .password-input-group {
+            position: relative;
+            z-index: 1;
+        }
+        
+        .password-input-group input {
+            width: 100%;
+            padding: 14px 16px;
+            background: rgba(47, 54, 60, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(74, 158, 255, 0.3);
+            border-radius: 10px;
+            color: #fff;
+            font-size: 14px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-sizing: border-box;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+        
+        .password-input-group input::placeholder {
+            color: rgba(255, 255, 255, 0.4);
+        }
+        
+        .password-input-group input:focus {
+            outline: none;
+            border-color: #4a9eff;
+            background: rgba(47, 54, 60, 0.95);
+            box-shadow: 
+                0 0 0 3px rgba(74, 158, 255, 0.2),
+                0 4px 12px rgba(74, 158, 255, 0.3);
+            transform: translateY(-1px);
+        }
+        
+        .password-modal-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+        
+        .password-modal-btn {
+            padding: 10px 25px;
+            border: none;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+        
+        .password-modal-btn {
+            position: relative;
+            z-index: 1;
+            overflow: hidden;
+        }
+        
+        .password-modal-btn.confirm {
+            background: linear-gradient(135deg, #4a9eff 0%, #258DF2 100%);
+            box-shadow: 0 4px 12px rgba(74, 158, 255, 0.4);
+        }
+        
+        .password-modal-btn.confirm::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+        
+        .password-modal-btn.confirm:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+        
+        .password-modal-btn.confirm:hover {
+            background: linear-gradient(135deg, #6bb6ff 0%, #4a9eff 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(74, 158, 255, 0.5);
+        }
+        
+        .password-modal-btn.cancel {
+            background: linear-gradient(135deg, #666 0%, #555 100%);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        
+        .password-modal-btn.cancel:hover {
+            background: linear-gradient(135deg, #777 0%, #666 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+        }
+        
+        .password-error {
+            color: #ff4444;
+            font-size: 12px;
+            margin-top: 8px;
+            display: none;
+        }
+        
+        .password-error.show {
+            display: block;
+        }
+        
+        /* 房间列表锁定状态 */
+        .room-list-locked {
+            text-align: center;
+            padding: 50px 20px;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 14px;
+            position: relative;
+        }
+        
+        .room-list-locked::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80px;
+            height: 80px;
+            border: 2px solid rgba(74, 158, 255, 0.3);
+            border-top-color: rgba(74, 158, 255, 0.8);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        .room-list-locked .lock-icon {
+            font-size: 40px;
+            margin-bottom: 15px;
+            background: linear-gradient(135deg, #4a9eff 0%, #6bb6ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            filter: drop-shadow(0 0 10px rgba(74, 158, 255, 0.5));
+            position: relative;
+            z-index: 1;
+        }
+        
+        @keyframes spin {
+            to { transform: translate(-50%, -50%) rotate(360deg); }
+        }
+        
+        
+        
+                /* 统一按钮样式，适配深色主题 */
+.panel-btn {
+    flex: 1;
+    padding: 12px 20px;
+    background: linear-gradient(135deg, #4a9eff 0%, #258DF2 100%);
+    border: none;
+    border-radius: 10px;
+    color: #fff;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 14px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 4px 12px rgba(74, 158, 255, 0.4);
+    position: relative;
+    overflow: hidden;
+    text-align: center;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.panel-btn::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.3);
+    transform: translate(-50%, -50%);
+    transition: width 0.6s, height 0.6s;
+}
+
+.panel-btn:hover::before {
+    width: 300px;
+    height: 300px;
+}
+
+.panel-btn:hover {
+    background: linear-gradient(135deg, #6bb6ff 0%, #4a9eff 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(74, 158, 255, 0.5);
+}
+
+.panel-btn:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 8px rgba(74, 158, 255, 0.4);
+}
+
+/* 复制按钮适配深色主题 */
+.copy-btn {
+    padding: 4px 8px;
+    font-size: 11px;
+    color: #4a9eff;
+    background: rgba(47, 54, 60, 0.8);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(74, 158, 255, 0.3);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.copy-btn:hover {
+    background: rgba(74, 158, 255, 0.15);
+    border-color: rgba(74, 158, 255, 0.5);
+    color: #6bb6ff;
+}
+
+/* 移除之前不兼容的浅色样式 */
+.qq-group-panel, .panel-title, .qq-group-info, .group-number {
+    /* 这些类现在由全局 .panel 样式接管 */
+}
+        
+       
+        
+    </style>
+    <script src="layui/auth.js" defer></script>
+</head>
+<body>
+    <div class="bg-decoration"></div>
+    <div class="container">
+        <!-- 头部 -->
+        <header class="header">
+            <h1><span class="header-icon">📡</span>WZ雷达<span class="version-tag">S43</span></h1>
+            <div class="status">
+                <div class="status-indicator" id="headerStatusIndicator"></div>
+                <span id="currentTime"></span>
+            </div>
+        </header>
+        
+        <!-- 雷达地图 -->
+        <section class="radar">
+            <canvas id="myCanvas" width="340" height="340"></canvas>
+        </section>
+        
+        <!-- 侧边栏 -->
+        <aside class="sidebar">
+            <!-- 房间列表 -->
+            <div class="panel">
+                <h3>
+                    房间列表
+                    <span id="connectionStatus" class="status-indicator disconnected" style="margin-left: 10px;"></span>
+                    <span id="homeText" style="font-size: 12px; color: #999; margin-left: 5px;">未连接</span>
+                </h3>
+                <div id="roomListContainer">
+                    <div class="list" id="homeList"></div>
+                </div>
+                <button class="disconnect-btn" onclick="disconnectRoom();" style="width: 100%; margin-top: 10px;">断开连接</button>
+            </div>
+            
+            <!-- 连接控制 -->
+            <div class="panel">
+                <h3>连接房间</h3>
+                <div class="connect-control">
+                    <input type="text" id="homeIdInput" placeholder="输入房间ID" onkeypress="if(event.key==='Enter') setHomeId();"/>
+                    <button onclick="setHomeId();">连接</button>
+                </div>
+            </div>
+            
+                                                        <!-- 加入QQ群交流 -->
+                        <div class="panel">
+                            <h3>加入QQ群交流</h3>
+                            <div class="connect-control">
+                                <a href="https://qun.qq.com/universal-share/share?ac=1&amp;authKey=7gFWyGcwtPx8NLKlEWkj3EUP28IzcSvzd6vpzXGFyUHWgYAf84N27VNAC0GdJV1R&amp;busi_data=eyJncm91cENvZGUiOiIxMDkxNDg2MzUwIiwidG9rZW4iOiJEQk9LV001ZVAxRmpQcGdab0haRHREazRDV3dJMzhQQkpwRmdXK3pFSCtvc1NaWVhuSEhwenRIcEQ3WHpFQTRzIiwidWluIjoiMzc5ODU5Mzg4NSJ9&amp;data=AE6jF7BuK97LiunarczMl0FtDqbyWv2qPRF_nCVrjvfyOlxP8WR6WkiO4z9-Ig6xJ5h8DR2NQhwC-b1JFmFWhQ&amp;svctype=4&amp;tempid=h5_group_info"
+                                   id="btnAddQQGroup"
+                                   class="panel-btn" 
+                                   target="_blank" 
+                                   rel="noopener noreferrer">
+                                    一键添加
+                                </a>
+                            </div>
+                            <div style="margin-top:8px;font-size:12px;color:#cbd5f5;display:flex;align-items:center;gap:8px;">
+                                QQ群号：1091486350
+                                <button class="copy-btn" onclick="copyGroupNumber()">复制群号</button>
+                            </div>
+                        </div>
+                        
+                        <!-- 消息提示 -->
+                        <div id="errorMessage" class="message error" style="display:none;"></div>
+                        <div id="successMessage" class="message success" style="display:none;"></div>
+                    </aside>
+                </div>
+              
+    
+    <!-- 提示弹窗 -->
+    <div id="infoModal" class="modal-overlay">
+        <div class="modal-content">
+            <h2>📡 WZ雷达</h2>
+            <p>王者荣耀实时雷达共享系统<br><span style="font-size:13px;color:rgba(255,255,255,0.5);">S43赛季 · 实时位置追踪</span></p>
+            <div class="group-info" style="font-size:15px;">输入房间ID开始使用</div>
+            <button class="modal-close-btn" onclick="closeInfoModal()">开始使用</button>
+        </div>
+    </div>
+    
+    <script type="text/javascript">
+        // 显示提示弹窗
+        function showInfoModal() {
+            var modal = document.getElementById('infoModal');
+            if(modal) {
+                modal.classList.add('show');
+            }
+        }
+        
+        // 关闭提示弹窗
+        function closeInfoModal() {
+            var modal = document.getElementById('infoModal');
+            if(modal) {
+                modal.classList.remove('show');
+            }
+        }
+        
+        
+        // 点击遮罩层关闭弹窗
+        document.addEventListener('DOMContentLoaded', function() {
+            var modal = document.getElementById('infoModal');
+            if(modal) {
+                modal.addEventListener('click', function(e) {
+                    if(e.target === modal) {
+                        closeInfoModal();
+                    }
+                });
+            }
+            
+        });
+        
+        // 更新时间
+        function updateTime() {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('zh-CN');
+            const dateStr = now.toLocaleDateString('zh-CN');
+            document.getElementById('currentTime').textContent = dateStr + ' ' + timeStr;
+        }
+        
+        
+        
+        
+        // 初始化应用（去除授权，直接连接服务器）
+        function initApp() {
+            setInterval(updateTime, 1000);
+            updateTime();
+        
+            // 直接尝试连接服务器
+            initWebSocket();
+            
+            // 页面加载后显示提示弹窗
+            setTimeout(function() {
+                showInfoModal();
+            }, 500); // 延迟500ms显示，确保页面已加载
+        }
+        
+        // 页面加载时初始化
+        window.addEventListener('DOMContentLoaded', function() {
+            initApp();
+        });
+        
+        // 原有的业务逻辑代码
+        document.onkeydown = function (event) {    
+            event = event || window.event;
+            if (event && (event.keyCode == 123 || event.key === 'F12')) {    
+                event.preventDefault();
+                event.stopPropagation();
+                return false;
+            }    
+        }
+        
+        var timestamp = new Date().getTime();
+        // 服务器IP：自动根据当前访问地址的主机生成（本机 / 部署机器的 IP）
+        // 默认使用当前 hostname + 端口 8888，例如 http://192.168.1.10 打开页面时，连接 ws://192.168.1.10:8888/ws
+        var ip = (function() {
+            var host = window.location.hostname;
+            var port = '8888'; // 如需修改端口，在此修改即可
+            if (!host || host === '') {
+                host = '127.0.0.1';
+            }
+            return host + ':' + port;
+        })();
+        var socket;
+        var homeId="";
+        var gameDataTime=8.33; // 120fps = 1000ms/120 ≈ 8.33ms
+        var showThisData=0;
+        var mapImageRotate=0;
+        var intervalIds = [];
+        var animationFrameId = null;
+        var lastDrawTime = 0;
+        var drawThrottle = 0; // 移除节流，使用requestAnimationFrame的天然帧率（通常60fps，高刷新率显示器可达120fps+）
+        var pendingGameData = null; // 待处理的游戏数据
+        var isDrawing = false; // 防止重复绘制
+        
+        // 房间列表更新优化
+        var lastRoomListData = null; // 上次的房间列表数据，用于比较
+        var lastRoomListUpdate = 0; // 上次更新时间
+        var roomListUpdateThrottle = 500; // 房间列表更新节流（500ms，减少跳动）
+        
+        // 敌方技能信息更新节流
+        var lastEnemySkillUpdate = 0;
+        var enemySkillUpdateThrottle = 200; // 限制技能信息更新频率为5fps（减少DOM操作，提高性能）
+        var lastEnemySkillData = null; // 上次的技能数据，用于比较
+        
+        var connectionState = 'disconnected';
+        var reconnectAttempts = 0;
+        var maxReconnectAttempts = 5;
+        var reconnectTimer = null;
+        var connectionTimeout = null; // WebSocket连接超时定时器
+        var roomListPasswordEncrypted = (function() {
+            // 使用更复杂的多层加密
+            var base64Part1 = 'MTE3Mj';
+            var base64Part2 = 'U0Mw==';
+            return base64Part1 + base64Part2;
+        })();
+        
+        function decryptPassword(encrypted) {
+            try {
+                // 实现更复杂的解密逻辑
+                var parts = [encrypted.substring(0, 6), encrypted.substring(6)];
+                var reconstructed = parts[0] + parts[1];
+                return atob(reconstructed);
+            } catch(e) {
+                console.error('密码解密失败:', e);
+                // 失败时返回默认值（使用字符编码方式，避免明文）
+                // 字符编码: '123456' 的ASCII码
+                return String.fromCharCode(49,50,51,52,53,54);
+            }
+        }
+        
+        // 获取解密后的房间列表密码
+        var roomListPassword = decryptPassword(roomListPasswordEncrypted);
+        
+        var isPasswordVerified = false; // 是否已通过密码验证
+        
+        var cache = {
+            roomList: [],
+            heroInfo: [],
+            lastUpdate: null,
+            cacheExpiry: 30000
+        };
+        function getWebSocketProtocol() {
+            var protocol = window.location.protocol;
+            if (protocol === 'https:') {
+                return 'wss://';
+            } else {
+                return 'ws://';
+            }
+        }
+        
+        function updateConnectionStatus(status, message) {
+            connectionState = status;
+            var statusElement = document.getElementById('connectionStatus');
+            var homeTextElement = document.getElementById('homeText');
+            var headerIndicator = document.getElementById('headerStatusIndicator');
+            
+            if(statusElement) {
+                statusElement.className = 'status-indicator ' + status;
+            }
+            
+            if(headerIndicator) {
+                if (status === 'connected') {
+                    headerIndicator.classList.remove('disconnected');
+                } else {
+                    headerIndicator.classList.add('disconnected');
+                }
+            }
+            
+            if(homeTextElement) {
+                // 只有在未连接房间时才更新状态文本，避免覆盖房间号显示
+                if(homeId === '' || status === 'disconnected' || status === 'error') {
+                    var statusText = {
+                        'connected': '已连接',
+                        'connecting': '连接中...',
+                        'disconnected': '未连接',
+                        'error': '连接错误'
+                    };
+                    homeTextElement.textContent = statusText[status] + (message ? ': ' + message : '');
+                } else if(status === 'connected' && homeId !== '') {
+                    // 如果已连接且有房间号，显示房间号
+                    homeTextElement.textContent = '已连接: ' + homeId;
+                }
+            }
+        }
+        
+        function showError(message, duration) {
+            var errorElement = document.getElementById('errorMessage');
+            if(errorElement) {
+                errorElement.textContent = '[ERROR] ' + message;
+                errorElement.style.display = 'block';
+                setTimeout(function() {
+                    errorElement.style.display = 'none';
+                }, duration || 5000);
+            }
+            console.error(message);
+        }
+        
+        function showSuccess(message, duration) {
+            var successElement = document.getElementById('successMessage');
+            if(successElement) {
+                successElement.textContent = '[SUCCESS] ' + message;
+                successElement.style.display = 'block';
+                setTimeout(function() {
+                    successElement.style.display = 'none';
+                }, duration || 3000);
+            }
+        }
+        
+        function saveToCache(key, data) {
+            try {
+                cache[key] = data;
+                cache.lastUpdate = new Date().getTime();
+                localStorage.setItem('gameCache_' + key, JSON.stringify({
+                    data: data,
+                    timestamp: cache.lastUpdate
+                }));
+            } catch(e) {
+                console.warn('保存缓存失败:', e);
+            }
+        }
+        
+        function getFromCache(key) {
+            try {
+                var cached = localStorage.getItem('gameCache_' + key);
+                if(cached) {
+                    var parsed = JSON.parse(cached);
+                    var now = new Date().getTime();
+                    if(now - parsed.timestamp < cache.cacheExpiry) {
+                        return parsed.data;
+                    }
+                }
+            } catch(e) {
+                console.warn('读取缓存失败:', e);
+            }
+            return null;
+        }
+        
+        const homeIdInput = document.getElementById("homeIdInput");
+        const homeText = document.getElementById("homeText");
+        const homeList = document.getElementById("homeList");
+        const canvas_game = document.getElementById("myCanvas");
+        const context = canvas_game.getContext("2d");
+        // 优化canvas渲染性能
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = 'high';
+        
+        // 动态适配map文件尺寸
+        let originalCanvasSize = 340; // 原始坐标系统基于340x340
+        let scaleX = 1;
+        let scaleY = 1;
+        let mapImage = new Image();
+        let mapActualWidth = 340; // map.png的实际宽度（像素）
+        let mapActualHeight = 340; // map.png的实际高度（像素）
+        
+        // 加载map图片以获取实际尺寸并适配到canvas
+        mapImage.onload = function() {
+            const mapWidth = mapImage.naturalWidth;
+            const mapHeight = mapImage.naturalHeight;
+            
+            // 保存map.png的实际尺寸，用于坐标转换
+            mapActualWidth = mapWidth;
+            mapActualHeight = mapHeight;
+            
+            // 根据map的实际尺寸调整canvas尺寸（保持比例）
+            // 获取radar容器的最大可用尺寸
+            const radarContainer = document.querySelector('.radar');
+            const maxContainerWidth = radarContainer ? radarContainer.clientWidth - 30 : 600;
+            const maxContainerHeight = window.innerHeight * 0.7;
+            const maxCanvasSize = Math.min(maxContainerWidth, maxContainerHeight, 800);
+            
+            let canvasWidth, canvasHeight;
+            
+            if (mapWidth >= mapHeight) {
+                canvasWidth = maxCanvasSize;
+                canvasHeight = (mapHeight / mapWidth) * maxCanvasSize;
+            } else {
+                canvasHeight = maxCanvasSize;
+                canvasWidth = (mapWidth / mapHeight) * maxCanvasSize;
+            }
+            
+            // 更新canvas尺寸
+            canvas_game.width = canvasWidth;
+            canvas_game.height = canvasHeight;
+            
+            // 重新计算缩放比例：基于原始坐标系统(340x340)到canvas尺寸的映射
+            // 同时考虑map.png的实际尺寸，确保坐标系统一致
+            scaleX = canvasWidth / originalCanvasSize;
+            scaleY = canvasHeight / originalCanvasSize;
+            
+            // 如果map.png的实际尺寸与原始坐标系统不同，需要额外调整
+            // 假设游戏坐标系统基于340x340，但map.png可能是其他尺寸
+            // 这里我们保持scaleX和scaleY基于340x340，因为游戏数据基于这个坐标系统
+            
+            // 更新CSS样式以匹配canvas尺寸，确保地图完整显示
+            canvas_game.style.width = canvasWidth + 'px';
+            canvas_game.style.height = canvasHeight + 'px';
+            
+            console.log('Map实际尺寸:', mapWidth, 'x', mapHeight);
+            console.log('Canvas尺寸:', canvasWidth, 'x', canvasHeight);
+            console.log('坐标缩放比例:', scaleX, 'x', scaleY);
+            console.log('原始坐标系统:', originalCanvasSize, 'x', originalCanvasSize);
+            console.log('地图已成功适配到canvas，野怪绘制将自动适配');
+        };
+        
+        mapImage.onerror = function() {
+            console.warn('无法加载map.png，使用默认尺寸');
+            // 使用默认尺寸
+            scaleX = canvas_game.width / originalCanvasSize;
+            scaleY = canvas_game.height / originalCanvasSize;
+        };
+        
+        mapImage.src = 'map.png';
+        
+        // 初始缩放比例（如果map加载失败时使用）
+        scaleX = canvas_game.width / originalCanvasSize;
+        scaleY = canvas_game.height / originalCanvasSize;
+        
+        var 血条背景颜色="#FFFFFF95";
+        var 野怪颜色="#FFb800";
+        var 红方头像边框颜色="red";
+        var 蓝方头像边框颜色="#258DF2";
+        var 红方血条颜色="red";
+        var 蓝方血条颜色="#16b777";
+        var 红方兵线颜色="red";
+        var 蓝方兵线颜色="#258DF2";
+        var 野怪满CD时间=[0,60,70,90,120,240];
+        
+        const 防御塔 = new Image();
+        防御塔.onerror = function() {
+            console.warn("防御塔图片加载失败");
+        };
+        防御塔.src = "https://game.gtimg.cn/images/yxzj/img201606/tower/防御塔.png";
+        
+        const 回城 = new Image();
+        回城.onerror = function() {
+            console.warn("回城图片加载失败");
+        };
+        回城.src = "回城.png";
+        
+        var 英雄信息=[];
+        
+        function showThisFunction(){
+            showThisData=showThisData==1?0:1;
+            showThis.textContent=showThisData==1?"不显示我方":"显示我方";
+        }
+        
+        // 完整的英雄ID列表（基于王者荣耀官方API herolist.json，S43赛季共130个）
+        const imagePaths = ["105","106","107","108","109","110","111","112","113","114","115","116","117","118","119","120","121","123","124","125","126","127","128","129","130","131","132","133","134","135","136","137","139","140","141","142","144","146","148","149","150","151","152","153","154","155","156","157","159","162","163","166","167","168","169","170","171","172","173","174","175","176","177","178","179","180","182","183","184","186","187","188","189","190","191","192","193","194","195","196","197","198","199","312","501","502","503","504","505","506","507","508","509","510","511","513","514","515","517","518","519","521","522","523","524","525","527","528","529","531","533","534","536","537","538","540","542","544","545","548","550","558","563","564","577","581","582","583","584","585"];
+        
+        // 验证英雄数量
+        if(imagePaths.length !== 130) {
+            console.warn("警告：英雄数量不是130个，当前数量为：" + imagePaths.length);
+        }
+        console.log("英雄头像列表已加载，共" + imagePaths.length + "个英雄");
+        
+        // 检查英雄头像可用性统计
+        var heroCheckStats = {
+            total: imagePaths.length,
+            checked: 0,
+            success: 0,
+            failed: 0
+        };
+        
+        // 异步检查英雄头像是否可加载（可选，用于调试）
+        function checkHeroAvatarsAvailability() {
+            console.log("开始检查英雄头像可用性...");
+            heroCheckStats.checked = 0;
+            heroCheckStats.success = 0;
+            heroCheckStats.failed = 0;
+            
+            // 批量检查，每次检查5个，避免过多请求
+            var checkBatch = function(startIndex) {
+                var batchSize = 5;
+                var endIndex = Math.min(startIndex + batchSize, imagePaths.length);
+                var promises = [];
+                
+                for (var i = startIndex; i < endIndex; i++) {
+                    var heroId = imagePaths[i];
+                    var url = "https://game.gtimg.cn/images/yxzj/img201606/heroimg/" + heroId + "/" + heroId + ".jpg";
+                    
+                    var promise = new Promise(function(resolve) {
+                        var img = new Image();
+                        img.onload = function() {
+                            heroCheckStats.success++;
+                            heroCheckStats.checked++;
+                            resolve({heroId: heroId, success: true});
+                        };
+                        img.onerror = function() {
+                            heroCheckStats.failed++;
+                            heroCheckStats.checked++;
+                            resolve({heroId: heroId, success: false});
+                        };
+                        // 设置超时
+                        setTimeout(function() {
+                            if (!img.complete) {
+                                heroCheckStats.failed++;
+                                heroCheckStats.checked++;
+                                resolve({heroId: heroId, success: false, timeout: true});
+                            }
+                        }, 3000);
+                        img.src = url;
+                    });
+                    promises.push(promise);
+                }
+                
+                Promise.all(promises).then(function(results) {
+                    console.log("已检查: " + heroCheckStats.checked + "/" + heroCheckStats.total + 
+                              " | 成功: " + heroCheckStats.success + " | 失败: " + heroCheckStats.failed);
+                    
+                    if (endIndex < imagePaths.length) {
+                        // 继续检查下一批
+                        setTimeout(function() {
+                            checkBatch(endIndex);
+                        }, 200); // 延迟200ms避免请求过快
+                    } else {
+                        // 检查完成
+                        console.log("=== 英雄头像检查完成 ===");
+                        console.log("总计: " + heroCheckStats.total);
+                        console.log("成功加载: " + heroCheckStats.success + " (" + 
+                                  Math.round(heroCheckStats.success / heroCheckStats.total * 100) + "%)");
+                        console.log("加载失败: " + heroCheckStats.failed + " (" + 
+                                  Math.round(heroCheckStats.failed / heroCheckStats.total * 100) + "%)");
+                    }
+                });
+            };
+            
+            // 开始检查
+            checkBatch(0);
+        }
+        
+        // 在控制台输入 checkHeroAvatarsAvailability() 可以手动触发检查
+        window.checkHeroAvatarsAvailability = checkHeroAvatarsAvailability;
+        
+        const 防御塔图片Paths = ["5","10","20","30","40","50","60","70","80","90","100"];
+        
+        // 英雄头像缓存（按需加载）：仅在对局出现该英雄ID时才发起请求
+        const images = [];
+        
+        // 不再启动时批量预加载 imagePaths，改为 ensureHeroImage 按需加载
+
+        var HERO_AVATAR_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+        function getOfficialHeroAvatarUrl(heroId) {
+            return "https://game.gtimg.cn/images/yxzj/img201606/heroimg/" + heroId + "/" + heroId + ".jpg";
+        }
+        function getOfficialHeroAvatarPngUrl(heroId) {
+            var id = String(heroId == null ? '' : heroId).trim();
+            return "https://game.gtimg.cn/images/yxzj/img201606/heroimg/" + id + "/" + id + ".png";
+        }
+        function bindHeroAvatarSource(image, heroId) {
+            var id = String(heroId == null ? '' : heroId).trim();
+            if (!id) return;
+            var jpg = getOfficialHeroAvatarUrl(id);
+            var png = getOfficialHeroAvatarPngUrl(id);
+            var stage = 0;
+            image.onerror = function() {
+                if (stage === 0) {
+                    stage = 1;
+                    image.src = png;
+                    return;
+                }
+                if (stage === 1) {
+                    stage = 2;
+                    image.src = jpg + (jpg.indexOf('?') === -1 ? '?' : '&') + '_retry=' + Date.now();
+                    return;
+                }
+                image.onerror = null;
+                image.src = HERO_AVATAR_PLACEHOLDER;
+                if (window.__DEBUG_HERO_AVATAR && !image.__heroAvatarFailLogged) {
+                    image.__heroAvatarFailLogged = true;
+                    console.debug('英雄头像不可用（官网无资源或数据源ID与官网不一致），ID: ' + id);
+                }
+            };
+            image.src = jpg;
+        }
+
+        /** 预置列表外的英雄 ID（版本新英雄）按需创建官网头像，避免无图不绘制 */
+        function ensureHeroImage(heroId) {
+            var id = String(heroId == null ? '' : heroId).trim();
+            if (!id) return null;
+            if (images[id]) return images[id];
+            var image = new Image();
+            bindHeroAvatarSource(image, id);
+            images[id] = image;
+            return image;
+        }
+        
+        const 蓝方防御塔 = 防御塔图片Paths.map(path => {
+            const image = new Image();
+            image.src = "https://game.gtimg.cn/images/yxzj/img201606/tower/蓝方防御塔"+path+".png";
+            return image;
+        });
+        
+        const 红方防御塔 = 防御塔图片Paths.map(path => {
+            const image = new Image();
+            image.src = "https://game.gtimg.cn/images/yxzj/img201606/tower/红方防御塔"+path+".png";
+            return image;
+        });
+        
+        for (const key in 防御塔图片Paths) {
+            const imagePath = 防御塔图片Paths[key];
+            const image = new Image();
+            image.src = "https://game.gtimg.cn/images/yxzj/img201606/tower/蓝方防御塔"+imagePath+".png";
+            蓝方防御塔[imagePath] = image;
+            const image2 = new Image();
+            image2.src = "https://game.gtimg.cn/images/yxzj/img201606/tower/红方防御塔"+imagePath+".png";
+            红方防御塔[imagePath] = image2;
+        }
+
+        // 预加载 imagePaths 列表中的英雄头像（使用 bindHeroAvatarSource 支持降级回退）
+        for (const key in imagePaths) {
+            const imagePath = imagePaths[key];
+            ensureHeroImage(imagePath);
+        }
+        
+        // 优化的canvas绘制函数
+        function clearCanvas() {
+            // 使用更高效的清空方法
+            context.clearRect(0, 0, canvas_game.width, canvas_game.height);
+            // 预设置常用属性，减少状态切换
+            context.imageSmoothingEnabled = true;
+            context.imageSmoothingQuality = 'high';
+        }
+        
+        // 统一的游戏数据处理和绘制函数（优化性能）
+        function processGameData(gameDataString) {
+            if (!gameDataString || gameDataString.trim() === '') {
+                return;
+            }
+            
+            try {
+                // 使用requestAnimationFrame确保绘制在下一帧进行，避免阻塞
+                var startTime = performance.now();
+                clearCanvas();
+                var gameDataParts = gameDataString.split("---");
+                
+                // 先绘制英雄（底层）
+                if(gameDataParts.length >= 1 && gameDataParts[0]) {
+                    var rwData = gameDataParts[0].split("==");
+                    英雄信息 = rwData;
+                    saveToCache('heroInfo', rwData);
+                    
+                    for (var i = 0; i < rwData.length; i++) {
+                        var rwAll = rwData[i];
+                        if(rwAll && rwAll.trim() !== "") {
+                            var rw = rwAll.split(",");
+                            if(rw.length >= 9 && "" != rw[0]){
+                                var heroImg = ensureHeroImage(rw[0]);
+                                if (!heroImg) continue;
+                                var ultCD = Number(rw[3]);
+                                if(isNaN(ultCD)) {
+                                    ultCD = 0;
+                                }
+                                var skillCD = Number(rw[4]) || 0;
+                                
+                                // 尝试从不同位置获取召唤师技能CD
+                                var summoner1CD = undefined;
+                                var summoner2CD = undefined;
+                                
+                                // 优先从rw[1]获取召唤师技能CD
+                                if(rw[1] !== undefined && rw[1] !== '' && !isNaN(Number(rw[1]))) {
+                                    summoner1CD = Number(rw[1]);
+                                }
+                                
+                                // 检查其他可能的字段位置
+                                if(rw.length > 10) {
+                                    if(rw[9] !== undefined && rw[9] !== '' && !isNaN(Number(rw[9]))) {
+                                        if(summoner1CD === undefined) {
+                                            summoner1CD = Number(rw[9]);
+                                        }
+                                    }
+                                    if(rw[10] !== undefined && rw[10] !== '' && !isNaN(Number(rw[10]))) {
+                                        summoner2CD = Number(rw[10]);
+                                    }
+                                } else if(rw.length > 9) {
+                                    if(rw[9] !== undefined && rw[9] !== '' && !isNaN(Number(rw[9]))) {
+                                        if(summoner1CD === undefined) {
+                                            summoner1CD = Number(rw[9]);
+                                        } else {
+                                            summoner2CD = Number(rw[9]);
+                                        }
+                                    }
+                                } else if(rw.length > 2) {
+                                    if(rw[2] !== undefined && rw[2] !== '' && !isNaN(Number(rw[2]))) {
+                                        if(summoner1CD === undefined) {
+                                            summoner1CD = Number(rw[2]);
+                                        } else {
+                                            summoner2CD = Number(rw[2]);
+                                        }
+                                    }
+                                }
+                                
+                                // 获取英雄等级
+                                var heroLevel = undefined;
+                                if(rw[1] !== undefined && rw[1] !== '') {
+                                    var levelValue = Number(rw[1]);
+                                    if(!isNaN(levelValue) && levelValue >= 1 && levelValue <= 30) {
+                                        heroLevel = levelValue;
+                                    }
+                                }
+                                if(heroLevel === undefined && rw[2] !== undefined && rw[2] !== '') {
+                                    var levelValue2 = Number(rw[2]);
+                                    if(!isNaN(levelValue2) && levelValue2 >= 1 && levelValue2 <= 30) {
+                                        heroLevel = levelValue2;
+                                    }
+                                }
+                                
+                                // 确保阵营值被正确解析（zy: 1=蓝方, 其他=红方）
+                                var zy = Number(rw[8]);
+                                if(isNaN(zy)) {
+                                    zy = 0; // 默认红方
+                                }
+                                drawImageAtPosition(rw[5], rw[6], heroImg, 40, 40, zy, 1, ultCD, skillCD, summoner1CD, summoner2CD, heroLevel);
+                                drawHP(rw[5], rw[6], rw[7], zy);
+                            }
+                        }
+                    }
+                }
+                
+                // 绘制防御塔数据（如果存在）
+                if(gameDataParts.length >= 4 && gameDataParts[3]) {
+                    var towerData = gameDataParts[3].split("==");
+                    for (var i = 0; i < towerData.length; i++) {
+                        var towerAll = towerData[i];
+                        if(towerAll && towerAll.trim() !== "") {
+                            var tower = towerAll.split(",");
+                            if(tower.length >= 6) {
+                                绘制防御塔(tower[0], tower[1], tower[2], tower[3], tower[4], tower[5]);
+                            }
+                        }
+                    }
+                }
+                
+                
+                                // ===== 绘制兵线（在野怪之下、英雄之上）=====
+                if (gameDataParts.length >= 3 && gameDataParts[2]) {
+                    var minionData = gameDataParts[2].split("==");
+                
+                    for (var i = 0; i < minionData.length; i++) {
+                        var minionAll = minionData[i];
+                        if (!minionAll || !minionAll.trim()) continue;
+                
+                        var minion = minionAll.split(",");
+                        if (minion.length < 3) continue;
+                
+                        var minionX = Number(minion[0]);
+                        var minionY = Number(minion[1]);
+                        var minionZy = Number(minion[2]);
+                        var minionRadius = minion[3] ? Number(minion[3]) : 4;
+                
+                        if (!isNaN(minionX) && !isNaN(minionY)) {
+                            drawFilledCircle(minionX, minionY, minionRadius, minionZy);
+                        }
+                    }
+                }
+                
+                
+                // 最后绘制野怪（最上层）- 优化：合并遍历，减少循环次数
+                if(gameDataParts.length >= 3 && gameDataParts[1]) {
+                    var ygData = gameDataParts[1].split("==");
+                    
+                    // 提前定义变量
+                    var cd1660221 = null;
+                    var cd166009 = null;
+                    var cd166012 = null;
+                    var cd166022 = null;
+                    
+                    // 优化：第一次遍历获取关键CD值
+                    for (var j = 0; j < ygData.length; j++) {
+                        var ygAll = ygData[j];
+                        if(!ygAll || !ygAll.trim()) continue;
+                        var yg = ygAll.split(",");
+                        if(yg.length < 5) continue;
+                        
+                        var id = yg[2];
+                        var cd = Number(yg[1]);
+                        if (id === "1660221") {
+                            cd1660221 = cd;
+                        } else if (id === "166009") {
+                            cd166009 = cd;
+                        } else if (id === "166022") {
+                            cd166022 = cd;
+                        }
+                    }
+                    
+                    // 第二次遍历：绘制野怪（此时所有CD值已获取）
+                    for (var i = 0; i < ygData.length; i++) {
+                        var ygAll = ygData[i];
+                        if(!ygAll || !ygAll.trim()) continue;
+                        var yg = ygAll.split(",");
+                        if(yg.length < 5) continue;
+                        
+                        var 野怪CD = Number(yg[1]);
+                        var id = yg[2];
+                        var 野怪X = Number(yg[3]);
+                        var 野怪Y = Number(yg[4]);
+                        
+                        // 跳过特定坐标
+                        if (野怪X == 108 && 野怪Y == 104) {
+                            continue;
+                        }
+                        
+                        // 根据规则判断是否应该隐藏倒计时
+                        var hideCountdown = false;
+                        if (cd1660221 !== null && cd1660221 <= 180 && cd1660221 != 0 ) {
+                            if (id === "166009" || id === "166018" || id === "166012"|| id === "166022") {
+                                hideCountdown = true;
+                            }
+                        } else if (cd166009 !== null && cd166009 <= 210 && cd166009 != 0) {
+                            if (id === "166018") {
+                                hideCountdown = true;
+                            }
+                        }
+                        if (cd166022 !== null && cd166022 <= 210 && cd166022 != 0) {
+                            if (id === "166012") {
+                                hideCountdown = true;
+                            }
+                        }
+                        
+                        // 绘制野怪
+                        if (!isNaN(野怪X) && !isNaN(野怪Y) && 野怪X >= 0 && 野怪Y >= 0) {
+                            var isFullCDTime = false;
+                            for(var k = 0; k < 野怪满CD时间.length; k++) {
+                                if(野怪满CD时间[k] == 野怪CD) {
+                                    isFullCDTime = true;
+                                    break;
+                                }
+                            }
+                            
+                            if(hideCountdown || isFullCDTime || 野怪CD === 0) {
+                                drawText(野怪X, 野怪Y, '0', 5, -5);
+                            } else if(野怪CD > 0 && 野怪CD <= 240) {
+                                drawText(野怪X, 野怪Y, yg[1], 5, -5);
+                            }
+                        }
+                    }
+                }
+                
+                // 更新地图旋转
+                if(gameDataParts.length >= 5 && gameDataParts[4]) {
+                    mapImageRotate = Number(gameDataParts[4]);
+                }
+            } catch(e) {
+                var errorMsg = "处理游戏数据失败: " + e.message;
+                showError(errorMsg);
+                console.error("处理游戏数据时出错:", e);
+                var cachedHeroInfo = getFromCache('heroInfo');
+                if(cachedHeroInfo && cachedHeroInfo.length > 0) {
+                    英雄信息 = cachedHeroInfo;
+                    showSuccess("已加载缓存的游戏数据");
+                }
+            }
+        }
+        
+         function drawFilledCircle(x, y, radius, zy) {
+                try {
+                    // 如果是蓝方阵营，翻转坐标
+                    if (zy === 1) {
+                        x =  x;  // 假设地图宽度是340像素，翻转X坐标
+                        y = 340 - y;  // 假设地图高度是340像素，翻转Y坐标
+                    }
+            
+                    // 验证并转换坐标
+                    x = Number(x);
+                    y = Number(y);
+                    zy = Number(zy);
+                    radius = Number(radius) || 4;
+                    
+                    // 验证坐标是否有效
+                    if(isNaN(x) || isNaN(y) || x < 0 || y < 0) {
+                        return; // 无效坐标，跳过绘制
+                    }
+                    
+                    // 应用缩放
+                    var scaledX = x * scaleX;
+                    var scaledY = y * scaleY;
+                    var scaledRadius = radius * Math.min(scaleX, scaleY); // 使用较小的缩放值保持圆形
+                    
+                    // 验证坐标是否在canvas范围内（可选，允许超出范围绘制）
+                    context.beginPath();
+                    context.arc(scaledX, scaledY, scaledRadius, 0, Math.PI * 2);
+                    
+                    // 阵营判断：1=蓝方，其他=红方（确保zy是数字类型）
+                    var minionColor = (zy === 1 || zy === '1') ? 蓝方兵线颜色 : 红方兵线颜色;
+                    context.fillStyle = minionColor;
+                    context.fill();
+                    context.closePath();
+                } catch(e) {
+                    console.error("绘制兵线时出错:", e, "x:", x, "y:", y, "radius:", radius, "zy:", zy);
+                }
+            }
+        
+        function drawText(x, y, text, offsetX, offsetY) {
+            // 先转换为数字
+            x = Number(x);
+            y = Number(y);
+            
+            // 验证坐标有效性
+            if(isNaN(x) || isNaN(y)) {
+                return;
+            }
+            
+            // 应用缩放：将游戏坐标系统(340x340)映射到canvas实际尺寸
+            // 确保野怪位置与map.png完全对应
+            var scaledX = x * scaleX;
+            var scaledY = y * scaleY;
+            
+            // 如果有偏移量，在缩放后应用（避免偏移被缩放导致错位）
+            // 使用统一的缩放因子，保持偏移的一致性
+            if(offsetX !== undefined && offsetY !== undefined) {
+                var uniformScale = Math.min(scaleX, scaleY);
+                scaledX += offsetX * uniformScale;
+                scaledY += offsetY * uniformScale;
+            }
+            
+            // 优化：使用更高效的方式检查满CD
+            var 野怪cd = Number(text);
+            var isFullCD = false;
+            for(var i = 0; i < 野怪满CD时间.length; i++) {
+                if(野怪满CD时间[i] == 野怪cd) {
+                    isFullCD = true;
+                    野怪cd = 0;
+                    break;
+                }
+            }
+            
+            // 添加背景以提高可见性（野怪在最上层）
+            context.save();
+            if(isFullCD || 野怪cd == 0){
+                // CD为0时显示圆点，增大尺寸并添加边框
+                var radius = 5 * Math.min(scaleX, scaleY);
+                context.beginPath();
+                context.arc(scaledX, scaledY, radius, 0, Math.PI * 2);
+                context.fillStyle = 野怪颜色;
+                context.fill();
+                // 添加白色边框提高可见性
+                context.strokeStyle = '#ffffff';
+                context.lineWidth = 1.5 * Math.min(scaleX, scaleY);
+                context.stroke();
+                context.closePath();
+            }else{
+                // CD大于0时显示数字，添加背景
+                var fontSize = Math.max(12 * Math.min(scaleX, scaleY), 10);
+                context.font = 'bold ' + fontSize + 'px Arial';
+                
+                // 测量文字宽度
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                var textWidth = context.measureText(野怪cd).width;
+                var padding = 4 * Math.min(scaleX, scaleY);
+                
+                // 绘制半透明背景（矩形）
+                var bgX = scaledX - textWidth / 2 - padding;
+                var bgY = scaledY - fontSize / 2 - padding;
+                var bgW = textWidth + padding * 2;
+                var bgH = fontSize + padding * 2;
+                
+                context.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                context.fillRect(bgX, bgY, bgW, bgH);
+                
+                // 绘制文字
+                context.fillStyle = 野怪颜色;
+                context.fillText(野怪cd, scaledX, scaledY);
+            }
+            // 注意：context.save()在函数开始，restore在这里
+            context.restore();
+        }
+        
+        function drawImageAtPosition(x, y, image, width, height, zy, hc, ultCD, skillCD, summoner1CD, summoner2CD, level) {
+            try {
+                if(!image) {
+                    return;
+                }
+                if(image.complete && image.naturalWidth > 0) {
+                    x = Number(x) * scaleX;
+                    y = Number(y) * scaleY;
+                    width = Number(width) * scaleX;
+                    height = Number(height) * scaleY;
+                    zy = Number(zy);
+                    hc = Number(hc);
+                    
+                    // 边界检测：如果头像+血条+CD会超出canvas底部，向上调整
+                    // CD只显示1行（大招），约12像素高度
+                    var hpY = y + 40 * scaleY;
+                    var cdY = hpY + 12 * scaleY; // CD文字在血条下方12像素
+                    var maxCDHeight = 12 * scaleY; // 1行CD
+                    if (cdY + maxCDHeight + 10 > canvas_game.height) {
+                        y -= (maxCDHeight + 10);
+                    } else if (y <= 10) {
+                        y += (maxCDHeight + 10);
+                    }
+                    
+                    // 优化：减少save/restore调用，批量绘制
+                    const radius = Math.max(width, height) / 2 - 2;
+                    const centerX = x + width / 2;
+                    const centerY = y + height / 2;
+                    
+                    // 绘制头像（使用clip）
+                    context.save();
+                    context.beginPath();
+                    context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+                    context.clip();
+                    context.drawImage(image, x, y, width, height);
+                    context.restore();
+                    
+                    // 批量绘制边框和圆圈（减少状态切换）
+                    context.save();
+                    // 绘制红色边框圆圈（缩小边框）
+                    context.beginPath();
+                    context.arc(centerX, centerY, radius + 1, 0, Math.PI * 2);
+                    context.strokeStyle = "red";
+                    context.lineWidth = 4 * scaleX; // 从10减小到4，使边框更细
+                    context.stroke();
+                    
+                    // 绘制左下角绿色圆圈（带白色边框，改小）
+                    var greenCircleRadius = 8 * Math.min(scaleX, scaleY); // 改小圆圈
+                    var greenCircleX = x + greenCircleRadius + 2;
+                    var greenCircleY = y + height - greenCircleRadius - 2;
+                    context.beginPath();
+                    context.arc(greenCircleX, greenCircleY, greenCircleRadius + 1, 0, Math.PI * 2);
+                    context.fillStyle = "white";
+                    context.fill();
+                    context.beginPath();
+                    context.arc(greenCircleX, greenCircleY, greenCircleRadius, 0, Math.PI * 2);
+                    context.fillStyle = "green";
+                    context.fill();
+                    
+                    // 绘制右下角黄色圆圈（带白色边框，改小）
+                    var yellowCircleRadius = 8 * Math.min(scaleX, scaleY); // 改小圆圈
+                    var yellowCircleX = x + width - yellowCircleRadius - 2;
+                    var yellowCircleY = y + height - yellowCircleRadius - 2;
+                    context.beginPath();
+                    context.arc(yellowCircleX, yellowCircleY, yellowCircleRadius + 1, 0, Math.PI * 2);
+                    context.fillStyle = "white";
+                    context.fill();
+                    context.beginPath();
+                    context.arc(yellowCircleX, yellowCircleY, yellowCircleRadius, 0, Math.PI * 2);
+                    context.fillStyle = "yellow";
+                    context.fill();
+                    context.restore();
+                    
+                    // 在头像上显示等级（右上角）
+                    if(level !== undefined && level !== null && level !== '') {
+                        drawHeroLevel(x, y, width, height, level, zy);
+                    }
+                    
+                    // 在绿色和黄色圆圈里显示CD时间
+                    drawCDTimesInCircles(x, y, width, height, ultCD, skillCD, summoner1CD, summoner2CD, zy);
+                }
+            } catch(e) {
+                console.error("绘制头像时出错:", e);
+            }
+        }
+        
+        // 绘制英雄等级（在头像右上角）
+        function drawHeroLevel(x, y, width, height, level, zy) {
+            try {
+                level = Number(level);
+                if(isNaN(level) || level <= 0) {
+                    return;
+                }
+                
+                var fontSize = Math.max(10 * Math.min(scaleX, scaleY), 9);
+                var levelText = 'Lv.' + level;
+                var padding = 3 * Math.min(scaleX, scaleY);
+                // 阵营判断：1=蓝方，其他=红方（确保zy是数字类型）
+                var bgColor = (zy === 1 || zy === '1') ? 'rgba(74, 158, 255, 0.9)' : 'rgba(255, 68, 68, 0.9)';
+                var textColor = '#ffffff';
+                
+                context.save();
+                context.font = 'bold ' + fontSize + 'px Arial';
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                
+                // 测量文字宽度
+                var textWidth = context.measureText(levelText).width;
+                var bgWidth = textWidth + padding * 2;
+                var bgHeight = fontSize + padding;
+                
+                // 等级显示在头像右上角
+                var levelX = x + width - bgWidth / 2 - 2 * Math.min(scaleX, scaleY);
+                var levelY = y + bgHeight / 2 + 2 * Math.min(scaleX, scaleY);
+                
+                // 绘制背景（圆角矩形）
+                var bgX = levelX - bgWidth / 2;
+                var bgY = levelY - bgHeight / 2;
+                var radius = 3 * Math.min(scaleX, scaleY);
+                
+                context.fillStyle = bgColor;
+                context.beginPath();
+                context.moveTo(bgX + radius, bgY);
+                context.lineTo(bgX + bgWidth - radius, bgY);
+                context.quadraticCurveTo(bgX + bgWidth, bgY, bgX + bgWidth, bgY + radius);
+                context.lineTo(bgX + bgWidth, bgY + bgHeight - radius);
+                context.quadraticCurveTo(bgX + bgWidth, bgY + bgHeight, bgX + bgWidth - radius, bgY + bgHeight);
+                context.lineTo(bgX + radius, bgY + bgHeight);
+                context.quadraticCurveTo(bgX, bgY + bgHeight, bgX, bgY + bgHeight - radius);
+                context.lineTo(bgX, bgY + radius);
+                context.quadraticCurveTo(bgX, bgY, bgX + radius, bgY);
+                context.closePath();
+                context.fill();
+                
+                // 绘制文字
+                context.fillStyle = textColor;
+                context.fillText(levelText, levelX, levelY);
+                
+                context.restore();
+            } catch(e) {
+                console.error("绘制英雄等级时出错:", e);
+            }
+        }
+        
+        // 绘制CD时间文字（在绿色和黄色圆圈里）
+        function drawCDTimesInCircles(x, y, width, height, ultCD, skillCD, summoner1CD, summoner2CD, zy) {
+            try {
+                // 注意：这里的x, y, width, height已经是缩放后的坐标和尺寸
+                ultCD = Number(ultCD);
+                if(isNaN(ultCD)) {
+                    ultCD = 0;
+                }
+                
+                // 处理召唤师技能CD
+                summoner1CD = Number(summoner1CD);
+                if(isNaN(summoner1CD) || summoner1CD === undefined) {
+                    summoner1CD = undefined;
+                }
+                
+                // 圆圈参数（与drawImageAtPosition中的保持一致）
+                var circleRadius = 8 * Math.min(scaleX, scaleY); // 改小圆圈
+                var greenCircleX = x + circleRadius + 2;
+                var greenCircleY = y + height - circleRadius - 2;
+                var yellowCircleX = x + width - circleRadius - 2;
+                var yellowCircleY = y + height - circleRadius - 2;
+                
+                // 字体大小（适配改小的圆圈）
+                var fontSize = Math.max(8 * Math.min(scaleX, scaleY), 7);
+                
+                context.save();
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                context.font = 'bold ' + fontSize + 'px Arial';
+                
+                // 在绿色圆圈里显示"大"的CD（左下角）- 只显示数字或✓
+                var ultText = '';
+                if(ultCD > 0) {
+                    ultText = Math.ceil(ultCD).toString(); // 冷却中，直接显示倒计时数字
+                } else {
+                    ultText = '✓'; // 就绪时显示✓
+                }
+                // 绿色圆圈上用白色文字，更清晰
+                context.fillStyle = '#ffffff';
+                context.fillText(ultText, greenCircleX, greenCircleY);
+                
+                // 在黄色圆圈里显示"召"的CD（右下角）- 只显示数字或✓
+                var summonerText = '';
+                if(skillCD !== undefined && !isNaN(skillCD)) {
+                    if(skillCD > 0) {
+                        summonerText = Math.ceil(skillCD).toString(); // 冷却中，直接显示倒计时数字
+                    } else {
+                        summonerText = '✓'; // 就绪时显示✓
+                    }
+                    // 黄色圆圈上用黑色文字，更清晰
+                    context.fillStyle = '#000000';
+                    context.fillText(summonerText, yellowCircleX, yellowCircleY);
+                }
+                
+                context.restore();
+            } catch(e) {
+                console.error("绘制CD时间时出错:", e);
+            }
+        }
+        
+        function drawHP(x, y, hp, zy) {
+            try {
+                // 坐标转换（与drawImageAtPosition保持一致）
+                x = Number(x) * scaleX;
+                var originalY = Number(y) * scaleY;
+                
+                // 边界检测：如果头像+血条+CD会超出canvas底部，向上调整（与drawImageAtPosition保持一致）
+                // CD只显示1行（大招），约12像素高度
+                var hpY = originalY + 40 * scaleY;
+                var cdY = hpY + 12 * scaleY; // CD文字在血条下方12像素
+                var maxCDHeight = 12 * scaleY; // 1行CD
+                if (cdY + maxCDHeight + 10 > canvas_game.height) {
+                    originalY -= (maxCDHeight + 10);
+                } else if (originalY <= 10) {
+                    originalY += (maxCDHeight + 10);
+                }
+                y = originalY + 40 * scaleY; // 血条在头像下方40像素
+                
+                hp = Number(hp);
+                zy = Number(zy);
+                
+                // 验证数据有效性
+                if(isNaN(x) || isNaN(y) || isNaN(hp) || hp < 0 || hp > 100) {
+                    return; // 无效数据，跳过绘制
+                }
+                
+                const maxWidth = 40 * scaleX;
+                const hpWidth = (hp / 100) * maxWidth;
+                
+                // 绘制血条背景
+                context.beginPath();
+                context.moveTo(x, y); 
+                context.lineTo(x + maxWidth, y); 
+                context.strokeStyle = 血条背景颜色;
+                context.lineWidth = 5 * scaleX;
+                context.stroke(); 
+                
+                // 绘制血条
+                context.beginPath();
+                context.moveTo(x, y);
+                context.lineTo(x + hpWidth, y);
+                // 阵营判断：1=蓝方，其他=红方（确保zy是数字类型）
+                var hpColor = (zy === 1 || zy === '1') ? 蓝方血条颜色 : 红方血条颜色;
+                context.strokeStyle = hpColor;
+                context.lineWidth = 5 * scaleX;
+                context.stroke();
+                context.closePath();
+            } catch(e) {
+                console.error("绘制血条时出错:", e, "x:", x, "y:", y, "hp:", hp, "zy:", zy);
+            }
+        }
+        
+        function 绘制防御塔(x, y, hp, zy , width, height) {
+            try {
+                x = Number(x) * scaleX;
+                y = Number(y) * scaleY;
+                width = Number(width) * scaleX;
+                height = Number(height) * scaleY;
+                hp = Number(hp);
+                if(0<hp && 防御塔 && 防御塔.complete && 防御塔.naturalWidth > 0){
+                    zy = Number(zy);
+                    context.save();
+                    const radius = Math.max(width, height) / 2 - 2;
+                    context.beginPath();
+                    context.arc(x + width / 2, y + height / 2, radius, 0, Math.PI * 2);
+                    context.clip();
+                    context.drawImage(防御塔, x, y, width, height);
+                    context.beginPath();
+                    context.arc(x + width / 2, y + height / 2, radius, 0, Math.PI * 2);
+                    context.clip();
+                    // 优化：使用数学计算代替多个if判断，提高性能
+                    var index = Math.floor(hp / 10) * 10;
+                    if (index > 100) index = 100;
+                    if (index < 10) index = 5;
+                    if (index === 0) index = 5;
+                    
+                    // 阵营判断：1=蓝方，其他=红方（确保zy是数字类型）
+                    var towerImage = (zy === 1 || zy === '1') ? 蓝方防御塔[index] : 红方防御塔[index];
+                    if(towerImage && towerImage.complete && towerImage.naturalWidth > 0) {
+                        context.drawImage(towerImage, x, y, width, height);
+                    }
+                    context.restore();
+                }
+            } catch(e) {
+                console.error("绘制防御塔时出错:", e);
+            }
+        }
+
+        function setupWebSocketHandlers() {
+            if(!socket) return;
+            
+            socket.onmessage = function (event) {
+                 try {
+                     var datas = event.data.split("##");
+                     if(datas.length < 2) {
+                         console.warn("收到格式异常的消息:", event.data.substring(0, 100));
+                         return;
+                     }
+                     // 移除频繁的日志输出以提高性能
+                    // console.log("收到消息类型:", datas[0], "数据长度:", datas[1] ? datas[1].length : 0);
+                     if("homeData"===datas[0]){
+                    try {
+                        var roomData = datas[1];
+                        var roomList = [];
+                        if(roomData && roomData.trim() !== "") {
+                            roomList = roomData.split(",").filter(room => room && room.trim() !== "");
+                        }
+                        saveToCache('roomList', roomList);
+                        
+                        // 检测当前连接的房间是否还在列表中（房间已关闭检测）
+                        if(homeId && homeId !== '') {
+                            var roomExists = roomList.some(function(room) {
+                                return room === homeId;
+                            });
+                            
+                            // 如果当前连接的房间不在列表中，说明房间已关闭，自动断开
+                            if(!roomExists) {
+                                console.log("检测到房间已关闭，自动断开连接:", homeId);
+                                disconnectRoom();
+                                showError("房间 " + homeId + " 已关闭，已自动断开连接", 3000);
+                            }
+                        }
+                        
+                        // 更新房间列表（优化：只在数据变化时更新，减少跳动）
+                        var now = performance.now();
+                        var shouldUpdate = false;
+                        
+                        // 检查数据是否变化
+                        if(!lastRoomListData || lastRoomListData.length !== roomList.length) {
+                            shouldUpdate = true;
+                        } else {
+                            // 比较房间列表内容
+                            for(var i = 0; i < roomList.length; i++) {
+                                if(lastRoomListData[i] !== roomList[i]) {
+                                    shouldUpdate = true;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // 节流控制：限制更新频率
+                        if(shouldUpdate && (now - lastRoomListUpdate >= roomListUpdateThrottle)) {
+                            var listHtml='';
+                            if(roomList.length > 0){
+                                roomList.forEach((buttonName,index) => {
+                                    var listClass = 'list-item';
+                                    if(buttonName == homeId) {
+                                        listClass += ' active';
+                                    }
+                                    var safeRoomName = buttonName.replace(/'/g, "&#39;").replace(/"/g, "&quot;");
+                                    var safeRoomNameForAttr = buttonName.replace(/'/g, "\\'").replace(/"/g, '\\"');
+                                    listHtml+='<div onclick="buttonClicked(\''+safeRoomNameForAttr+'\');" class="'+listClass+'">'+safeRoomName+'</div>';
+                                });
+                            }else{
+                                 listHtml+='<div class="list-item" style="cursor: default;">暂时没人开启共享</div>';
+                            }
+                            if(homeList) {
+                                homeList.innerHTML = listHtml;
+                            }
+                            
+                            // 保存当前数据用于下次比较
+                            lastRoomListData = roomList.slice(); // 创建副本
+                            lastRoomListUpdate = now;
+                        } else if(shouldUpdate) {
+                            // 数据变化但需要节流，只更新active状态（不重新渲染整个列表）
+                            if(homeList && lastRoomListData && lastRoomListData.length === roomList.length) {
+                                var items = homeList.querySelectorAll('.list-item');
+                                for(var i = 0; i < items.length && i < roomList.length; i++) {
+                                    if(roomList[i] == homeId) {
+                                        items[i].classList.add('active');
+                                    } else {
+                                        items[i].classList.remove('active');
+                                    }
+                                }
+                            }
+                        }
+                        if(homeText) {
+                            // 更新房间号显示，确保显示当前连接状态
+                            if(homeId === '') {
+                                homeText.textContent = connectionState === 'connected' ? '未连接房间' : '未连接';
+                            } else {
+                                homeText.textContent = '已连接: ' + homeId;
+                            }
+                        }
+                    } catch(e) {
+                        var errorMsg = "解析房间列表失败: " + e.message;
+                        showError(errorMsg);
+                        console.error("处理房间列表数据时出错:", e);
+                        var cachedRooms = getFromCache('roomList');
+                        if(cachedRooms && cachedRooms.length > 0) {
+                            showSuccess("已加载缓存的房间列表");
+                        }
+                    }
+                 }else if("gameData"===datas[0]){
+                    try {
+                        // 保存最新数据，由gameLoop统一处理绘制（避免重复绘制和冲突）
+                        pendingGameData = datas[1];
+                        // 不在这里直接绘制，由gameLoop统一调度
+                    } catch(e) {
+                        var errorMsg = "接收游戏数据失败: " + e.message;
+                        showError(errorMsg);
+                        console.error("接收游戏数据时出错:", e);
+                    }
+                 }
+                 } catch(e) {
+                     var errorMsg = "处理服务器消息失败: " + (e.message || "未知错误");
+                     showError(errorMsg);
+                     console.error("处理服务器消息时出错:", e);
+                 }
+            }
+            
+            socket.onerror = function (event) {
+                // 清除连接超时定时器
+                if(connectionTimeout) {
+                    clearTimeout(connectionTimeout);
+                    connectionTimeout = null;
+                }
+                
+                updateConnectionStatus('error', '连接失败');
+                var wsProtocol = getWebSocketProtocol();
+                var cleanIP = ip ? ip.trim().replace(/\/$/, '') : '未配置';
+                var wsUrl = wsProtocol + cleanIP + "/ws";
+                
+                // 根据错误类型提供更详细的错误信息
+                var errorMsg = "无法连接到服务器: " + wsUrl;
+                errorMsg += "\n可能的原因：";
+                errorMsg += "\n1. WebSocket服务器未运行";
+                errorMsg += "\n2. 端口8888未开放或被防火墙阻止";
+                errorMsg += "\n3. 服务器地址或端口不正确";
+                errorMsg += "\n4. 网络连接问题";
+                
+                if(reconnectAttempts >= maxReconnectAttempts) {
+                    errorMsg += "\n(已达到最大重连次数)";
+                } else {
+                    errorMsg += "\n(正在重试 " + reconnectAttempts + "/" + maxReconnectAttempts + ")";
+                }
+                
+                showError(errorMsg);
+                console.error("WebSocket错误:", event);
+                console.error("连接URL:", wsUrl);
+                console.error("错误详情:", {
+                    readyState: socket ? socket.readyState : 'socket为null',
+                    url: wsUrl,
+                    protocol: wsProtocol
+                });
+            }
+
+            socket.onopen = function(event){
+                // 清除连接超时定时器
+                if(connectionTimeout) {
+                    clearTimeout(connectionTimeout);
+                    connectionTimeout = null;
+                }
+                
+                reconnectAttempts = 0;
+                updateConnectionStatus('connected', '');
+                showSuccess("已成功连接到服务器", 3000);
+                console.log("WebSocket连接成功");
+                
+                // 更新头部状态指示器
+                var headerIndicator = document.getElementById('headerStatusIndicator');
+                if (headerIndicator) {
+                    headerIndicator.classList.remove('disconnected');
+                }
+                
+                intervalIds.forEach(id => clearInterval(id));
+                intervalIds = [];
+                
+                getHome();
+                intervalIds.push(setInterval(getHome, 1000));
+                // 优化：使用120fps刷新频率，提供更流畅的体验
+                let lastFrameTime = 0;
+                let lastHomeUpdate = 0;
+                let lastHeroUpdate = 0;
+                const targetFPS = 120; // 游戏数据请求频率120fps（更流畅）
+                const frameInterval = 1000 / targetFPS;
+                
+                function gameLoop(currentTime) {
+                    // 120fps游戏数据刷新（高频率提供流畅体验）
+                    if (currentTime - lastFrameTime >= frameInterval) {
+                        getGameData();
+                        lastFrameTime = currentTime;
+                    }
+                    
+                    // 处理待绘制的游戏数据（无节流，直接绘制，确保最大流畅度）
+                    if (pendingGameData && !isDrawing) {
+                        isDrawing = true;
+                        processGameData(pendingGameData);
+                        pendingGameData = null;
+                        isDrawing = false;
+                        lastDrawTime = currentTime;
+                    }
+                    
+                    // 1秒更新一次房间列表
+                    if (currentTime - lastHomeUpdate >= 1000) {
+                        getHome();
+                        lastHomeUpdate = currentTime;
+                    }
+                    
+                    // 500ms更新一次canvas旋转
+                    if (currentTime - lastHeroUpdate >= 500) {
+                        刷新英雄信息();
+                        lastHeroUpdate = currentTime;
+                    }
+                    
+                    if (socket && socket.readyState === WebSocket.OPEN) {
+                        requestAnimationFrame(gameLoop);
+                    }
+                }
+                requestAnimationFrame(gameLoop);
+                // 英雄信息现在直接显示在canvas上，不需要定时更新侧边栏
+                
+                var cachedRooms = getFromCache('roomList');
+                if(cachedRooms && cachedRooms.length > 0) {
+                    console.log("从缓存加载房间列表");
+                }
+            }
+
+            socket.onclose = function (event) {
+                // 清除连接超时定时器
+                if(connectionTimeout) {
+                    clearTimeout(connectionTimeout);
+                    connectionTimeout = null;
+                }
+                
+                intervalIds.forEach(id => clearInterval(id));
+                intervalIds = [];
+                
+                updateConnectionStatus('disconnected', '');
+                
+                // 根据关闭代码提供更详细的错误信息
+                var closeReason = "未知原因";
+                switch(event.code) {
+                    case 1000:
+                        closeReason = "正常关闭";
+                        break;
+                    case 1001:
+                        closeReason = "端点离开（服务器关闭或浏览器导航）";
+                        break;
+                    case 1002:
+                        closeReason = "协议错误";
+                        break;
+                    case 1003:
+                        closeReason = "数据类型错误";
+                        break;
+                    case 1006:
+                        closeReason = "异常关闭（连接未正常关闭，可能是服务器未运行或网络问题）";
+                        break;
+                    case 1007:
+                        closeReason = "数据格式错误";
+                        break;
+                    case 1008:
+                        closeReason = "策略违规";
+                        break;
+                    case 1009:
+                        closeReason = "消息过大";
+                        break;
+                    case 1010:
+                        closeReason = "扩展协商失败";
+                        break;
+                    case 1011:
+                        closeReason = "服务器内部错误";
+                        break;
+                    case 1015:
+                        closeReason = "TLS握手失败";
+                        break;
+                    default:
+                        closeReason = "未知错误代码: " + event.code;
+                }
+                
+                console.log("WebSocket连接已关闭，代码:", event.code, "原因:", event.reason || closeReason);
+                
+                // 如果是异常关闭（1006），提供更详细的诊断信息
+                if(event.code === 1006) {
+                    console.error("连接异常关闭诊断：");
+                    console.error("  - 服务器地址:", ip);
+                    console.error("  - 连接URL: " + getWebSocketProtocol() + ip.replace(/\/$/, '') + "/ws");
+                    console.error("  - 可能原因: 1)服务器未运行 2)端口未开放 3)防火墙阻止 4)网络不通");
+                }
+                
+                if(event.code !== 1000 && reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    updateConnectionStatus('connecting', '正在重连 (' + reconnectAttempts + '/' + maxReconnectAttempts + ')');
+                    showError("连接断开，正在尝试重连 (" + reconnectAttempts + "/" + maxReconnectAttempts + ")...", 3000);
+                    
+                    if(reconnectTimer) {
+                        clearTimeout(reconnectTimer);
+                    }
+                    
+                    var delay = Math.min(5000 * reconnectAttempts, 30000);
+                    reconnectTimer = setTimeout(function() {
+                        // 先关闭旧连接（如果存在且不是已关闭状态）
+                        if(socket) {
+                            try {
+                                if(socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+                                    socket.onclose = null; // 移除旧的关闭事件处理器，避免重复触发
+                                    socket.close();
+                                }
+                            } catch(e) {
+                                console.warn("关闭旧连接时出错:", e);
+                            }
+                            socket = null;
+                        }
+                        
+                        // 检查IP是否有效
+                        if (!ip || ip.trim() === '') {
+                            showError("服务器IP未配置，无法重连", 5000);
+                            return;
+                        }
+                        
+                        console.log("尝试重新连接 (" + reconnectAttempts + "/" + maxReconnectAttempts + ")...");
+                        try {
+                            var wsProtocol = getWebSocketProtocol();
+                            // 确保IP格式正确（移除可能的斜杠）
+                            var cleanIP = ip.trim().replace(/\/$/, '');
+                            var wsUrl = wsProtocol + cleanIP + "/ws";
+                            console.log("重连WebSocket:", wsUrl);
+                            socket = new WebSocket(wsUrl);
+                            setupWebSocketHandlers();
+                        } catch(e) {
+                            console.error("重连失败:", e);
+                            showError("重连失败: " + e.message);
+                            // 如果重连失败，继续尝试（直到达到最大次数）
+                            if(reconnectAttempts < maxReconnectAttempts) {
+                                reconnectAttempts++;
+                                updateConnectionStatus('connecting', '正在重连 (' + reconnectAttempts + '/' + maxReconnectAttempts + ')');
+                            }
+                        }
+                    }, delay);
+                } else if(reconnectAttempts >= maxReconnectAttempts) {
+                    updateConnectionStatus('error', '重连失败');
+                    showError("已达到最大重连次数(" + maxReconnectAttempts + ")，请刷新页面重试", 10000);
+                }
+            }
+        }
+        
+        function initWebSocket() {
+            // 检查IP是否已配置
+            if (!ip || ip.trim() === '') {
+                updateConnectionStatus('error', '服务器IP未配置');
+                showError("服务器IP未配置，请在代码中配置服务器地址", 0);
+                return;
+            }
+            
+            // 如果已有连接，先关闭它
+            if(socket) {
+                try {
+                    if(socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+                        socket.onclose = null; // 移除旧的关闭事件处理器，避免触发重连
+                        socket.close();
+                    }
+                } catch(e) {
+                    console.warn("关闭旧连接时出错:", e);
+                }
+                socket = null;
+            }
+            
+            if(window.WebSocket){
+                var wsProtocol = getWebSocketProtocol();
+                updateConnectionStatus('connecting', '');
+                try {
+                    // 确保IP格式正确（移除可能的斜杠）
+                    var cleanIP = ip.trim().replace(/\/$/, '');
+                    var wsUrl = wsProtocol + cleanIP + "/ws";
+                    console.log("正在连接WebSocket:", wsUrl);
+                    
+                    // 清除之前的连接超时定时器
+                    if(connectionTimeout) {
+                        clearTimeout(connectionTimeout);
+                        connectionTimeout = null;
+                    }
+                    
+                    socket = new WebSocket(wsUrl);
+                    
+                    // 设置连接超时（10秒）
+                    connectionTimeout = setTimeout(function() {
+                        if(socket && socket.readyState !== WebSocket.OPEN) {
+                            console.error("WebSocket连接超时（10秒）");
+                            showError("连接超时：无法在10秒内连接到服务器。请检查：1)服务器是否运行 2)端口8888是否开放 3)防火墙设置", 10000);
+                            updateConnectionStatus('error', '连接超时');
+                            try {
+                                socket.close();
+                            } catch(e) {
+                                console.warn("关闭超时连接时出错:", e);
+                            }
+                            socket = null;
+                            
+                            // 如果未达到最大重连次数，触发重连
+                            if(reconnectAttempts < maxReconnectAttempts) {
+                                reconnectAttempts++;
+                                var delay = Math.min(5000 * reconnectAttempts, 30000);
+                                reconnectTimer = setTimeout(function() {
+                                    initWebSocket();
+                                }, delay);
+                            }
+                        }
+                    }, 10000);
+                    
+                    setupWebSocketHandlers();
+                } catch(e) {
+                    updateConnectionStatus('error', '连接失败');
+                    showError("无法建立WebSocket连接: " + e.message);
+                    console.error("WebSocket连接失败:", e);
+                    if(connectionTimeout) {
+                        clearTimeout(connectionTimeout);
+                        connectionTimeout = null;
+                    }
+                }
+            }else{
+                updateConnectionStatus('error', '不支持');
+                showError("您的浏览器不支持WebSocket，请使用现代浏览器（Chrome、Firefox、Edge等）");
+                if(homeText) {
+                    homeText.textContent="浏览器不支持WebSocket";
+                }
+            }
+        }
+
+        function send(message){
+            if(!window.WebSocket){
+                return;
+            }
+            if(!socket) {
+                console.warn("WebSocket未初始化");
+                return;
+            }
+            if(socket.readyState == WebSocket.OPEN){
+                try {
+                    socket.send(message);
+                    // 移除频繁日志以提高性能
+                } catch(e) {
+                    var errorMsg = "发送消息失败: " + e.message;
+                    showError(errorMsg);
+                    console.error("发送消息失败:", e);
+                }
+            }else{
+                var stateMsg = "连接状态异常";
+                if(socket.readyState === WebSocket.CONNECTING) {
+                    stateMsg = "正在连接中，请稍候...";
+                } else if(socket.readyState === WebSocket.CLOSING) {
+                    stateMsg = "连接正在关闭...";
+                } else if(socket.readyState === WebSocket.CLOSED) {
+                    stateMsg = "连接已断开";
+                }
+                showError(stateMsg);
+                console.warn("无法发送消息，WebSocket状态:", socket.readyState);
+            }
+        }
+        
+        function getHome() {
+            send("getHome");
+        }
+
+        function getGameData() {
+            if(""!=homeId && socket && socket.readyState === WebSocket.OPEN){
+                send("web"+timestamp+"[==]"+homeId);
+                // 移除日志以提高性能
+            }
+            // 移除警告日志以提高性能
+        }
+        
+        function buttonClicked(buttonText) {
+            if(buttonText && buttonText.trim() !== "") {
+                homeId = buttonText.trim();
+                console.log("连接到房间:", homeId);
+                showSuccess("正在连接到房间: " + homeId, 2000);
+                if(homeText) {
+                    homeText.textContent = "已连接: " + homeId;
+                }
+                
+                // 更新列表项的active状态（避免重新渲染整个列表，减少跳动）
+                if(homeList) {
+                    var items = homeList.querySelectorAll('.list-item');
+                    items.forEach(function(item) {
+                        var roomName = item.textContent.trim();
+                        if(roomName === homeId) {
+                            item.classList.add('active');
+                        } else {
+                            item.classList.remove('active');
+                        }
+                    });
+                }
+                
+                // 立即请求游戏数据
+                if(socket && socket.readyState === WebSocket.OPEN) {
+                    getGameData();
+                } else {
+                    showError("WebSocket未连接，请等待连接建立");
+                }
+            } else {
+                showError("房间名称无效");
+            }
+        }
+        
+        function disconnectRoom() {
+            homeId = "";
+            console.log("已断开房间连接");
+            showSuccess("已断开房间连接", 2000);
+            clearCanvas();
+            英雄信息 = [];
+            if(homeText) {
+                homeText.textContent = connectionState === 'connected' ? '未连接房间' : '未连接';
+            }
+            
+            // 移除所有列表项的active状态（避免重新渲染整个列表）
+            if(homeList) {
+                var items = homeList.querySelectorAll('.list-item');
+                items.forEach(function(item) {
+                    item.classList.remove('active');
+                });
+            }
+        }
+        
+        
+   
+// 复制群号功能（保持不变）
+function copyGroupNumber() {
+    const groupNumber = '1091486350';
+    navigator.clipboard.writeText(groupNumber).then(() => {
+        alert('群号已复制到剪贴板！');
+    }).catch(err => {
+        console.error('复制失败:', err);
+        const input = document.createElement('input');
+        input.value = groupNumber;
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand('copy');
+        document.body.removeChild(input);
+        alert('群号已复制到剪贴板！');
+    });
+}
+        
+        function loadCachedData() {
+            try {
+                var cachedRooms = getFromCache('roomList');
+                if(cachedRooms && cachedRooms.length > 0) {
+                    console.log("从缓存恢复房间列表:", cachedRooms.length + "个房间");
+                }
+                var cachedHeroInfo = getFromCache('heroInfo');
+                if(cachedHeroInfo && cachedHeroInfo.length > 0) {
+                    console.log("从缓存恢复英雄信息:", cachedHeroInfo.length + "个英雄");
+                    英雄信息 = cachedHeroInfo;
+                }
+            } catch(e) {
+                console.warn("加载缓存数据失败:", e);
+            }
+        }
+        
+        window.addEventListener('DOMContentLoaded', function() {
+            loadCachedData();
+        });
+        
+        function setHomeId(){
+            if(homeIdInput && homeIdInput.value) {
+                homeId = homeIdInput.value.trim();
+                console.log("设置房间ID:", homeId);
+                if(homeId) {
+                    showSuccess("正在连接到房间: " + homeId, 2000);
+                    if(homeText) {
+                        homeText.textContent = "已连接: " + homeId;
+                    }
+                    // 立即请求游戏数据
+                    if(socket && socket.readyState === WebSocket.OPEN) {
+                        getGameData();
+                    } else {
+                        showError("WebSocket未连接，请等待连接建立");
+                    }
+                } else {
+                    showError("房间名称不能为空");
+                }
+            } else {
+                showError("请输入房间名称");
+                console.warn("房间ID输入为空");
+            }
+        }
+        
+        function 刷新英雄信息(){
+            try {
+                if(canvas_game) {
+                    canvas_game.className=mapImageRotate==1?"rotate180":"rotate0";
+                }
+                // 英雄信息现在直接显示在canvas上，不需要更新侧边栏
+            } catch(e) {
+                console.error("刷新英雄信息时出错:", e);
+            }
+        }
+    </script>
+</body>
+</html>

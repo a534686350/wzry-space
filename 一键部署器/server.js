@@ -70,8 +70,14 @@ const DEPLOY_RECORDS_FILE =
   process.env.DEPLOY_RECORDS_FILE || path.join(DATA_DIR, 'deploy-records.json');
 const DEPLOY_CARDS_FILE =
   process.env.DEPLOY_CARDS_FILE || path.join(DATA_DIR, 'deploy-cards.json');
+const SERVER_AUTHORIZATIONS_FILE =
+  process.env.SERVER_AUTHORIZATIONS_FILE || path.join(DATA_DIR, 'server-authorizations.json');
 const MAX_DEPLOY_RECORDS = Math.max(50, Number(process.env.MAX_DEPLOY_RECORDS || 500) || 500);
 const CARD_RUNNING_TTL_MS = Math.max(600000, Number(process.env.CARD_RUNNING_TTL_MS || 7200000) || 7200000);
+const LICENSE_SERVER_URL =
+  String(process.env.LICENSE_SERVER_URL || process.env.PUBLIC_LICENSE_SERVER_URL || 'http://ld.llqq520.xyz').replace(/\/+$/, '');
+const AUTH_GROUP_URL =
+  String(process.env.AUTH_GROUP_URL || 'https://qm.qq.com/q/VcaTE1qumQ').trim();
 const adminSessions = new Map();
 
 // 启动时校验 payload 目录
@@ -145,6 +151,7 @@ app.get('/api/admin/summary', requireAdmin, (req, res) => {
     adminConfigured: !!ADMIN_PASSWORD,
     records: loadDeployRecords(),
     cards: publicDeployCards(loadDeployCards()),
+    authorizations: publicServerAuthorizations(loadServerAuthorizations()),
   });
 });
 
@@ -155,6 +162,62 @@ app.post('/api/admin/cards', requireAdmin, (req, res) => {
   res.json({
     ok: true,
     cards,
+  });
+});
+
+app.post('/api/admin/server-authorizations', requireAdmin, (req, res) => {
+  const result = upsertServerAuthorization(req.body || {});
+  if (!result.ok) {
+    res.status(400).json(result);
+    return;
+  }
+  res.json({
+    ok: true,
+    authorization: publicServerAuthorizations([result.authorization])[0],
+    authorizations: publicServerAuthorizations(loadServerAuthorizations()),
+  });
+});
+
+app.delete('/api/admin/server-authorizations/:id', requireAdmin, (req, res) => {
+  const result = deleteServerAuthorization(req.params.id);
+  if (!result.ok) {
+    res.status(404).json(result);
+    return;
+  }
+  res.json({ ok: true, authorizations: publicServerAuthorizations(loadServerAuthorizations()) });
+});
+
+app.options('/api/license/check', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  res.status(204).end();
+});
+
+app.get('/api/license/check', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Cache-Control', 'no-store');
+  const host = normalizeAuthHost(req.query.host || '');
+  const domain = normalizeAuthHost(req.query.domain || '');
+  const mode = normalizeAuthMode(req.query.mode || '');
+  const match = findServerAuthorization(host, mode, [domain]);
+  if (!match) {
+    res.json({
+      ok: true,
+      authorized: false,
+      permanent: false,
+      groupUrl: AUTH_GROUP_URL,
+      message: '当前服务器未授权，已开启 1 天试用；试用结束前请联系管理员授权。',
+    });
+    return;
+  }
+  res.json({
+    ok: true,
+    authorized: true,
+    permanent: !!match.permanent,
+    mode: match.mode || 'all',
+    groupUrl: AUTH_GROUP_URL,
+    message: '服务器授权通过',
   });
 });
 
@@ -210,6 +273,7 @@ io.on('connection', (socket) => {
       socket.emit('deploy:error', { message: validation.message });
       return;
     }
+    creds.licenseConfig = buildLicenseConfigForTarget(creds);
 
     const cardLock = acquireDeployCard(creds.deployCard, {
       socketId: socket.id,
@@ -233,6 +297,13 @@ io.on('connection', (socket) => {
     emit.log('info', `部署卡密验证通过，本次成功后将自动失效`);
     emit.log('info', `目标服务器信息已接收，SSH 端口: ${creds.port}  用户: ${creds.username}`);
     emit.log('info', `部署版本: ${variantLabel(creds.deployMode)}`);
+    if (creds.licenseConfig.permanent) {
+      emit.log('success', '目标服务器已匹配永久授权，部署产物将写入本地永久授权');
+    } else if (creds.licenseConfig.authorized) {
+      emit.log('success', '目标服务器已在授权名单中，部署产物将启用在线授权校验');
+    } else {
+      emit.log('warn', '目标服务器尚未授权，部署完成后可试用 1 天，页面会提示联系授权；可在后台添加该 IP 授权');
+    }
 
     let completed = false;
     try {
@@ -278,6 +349,49 @@ io.on('connection', (socket) => {
       socket.emit('deploy:error', { message: msg });
     } finally {
       if (!completed) releaseDeployCard(cardLock.card.id, cardLock.lockId);
+      activeJobs.delete(socket.id);
+    }
+  });
+
+  socket.on('clear:start', async (payload) => {
+    if (activeJobs.has(socket.id)) {
+      socket.emit('clear:error', { message: '已有任务在进行中，请稍候' });
+      return;
+    }
+
+    const creds = sanitizeCreds(payload);
+    const validation = validateCleanupCreds(creds);
+    if (!validation.ok) {
+      socket.emit('clear:error', { message: validation.message });
+      return;
+    }
+
+    const jobState = { cancelled: false };
+    activeJobs.set(socket.id, {
+      cancel: () => {
+        jobState.cancelled = true;
+      },
+    });
+
+    const emit = makeEmitter(socket);
+    emit.step('init', 'running', '开始清理服务器数据');
+    emit.log('warn', '即将清理本项目部署痕迹，不会格式化整台服务器');
+    emit.log('info', `目标服务器信息已接收，SSH 端口: ${creds.port}  用户: ${creds.username}`);
+
+    try {
+      await runServerCleanup({
+        creds,
+        emit,
+        shouldCancel: () => jobState.cancelled,
+      });
+      emit.step('done', 'success', '清理完成');
+      socket.emit('clear:done');
+    } catch (err) {
+      const msg = (err && err.message) || String(err);
+      emit.log('error', `清理失败: ${msg}`);
+      emit.step('done', 'failed', msg);
+      socket.emit('clear:error', { message: msg });
+    } finally {
       activeJobs.delete(socket.id);
     }
   });
@@ -369,6 +483,43 @@ io.on('connection', (socket) => {
     console.log(`[socket] disconnected ${socket.id}`);
   });
 });
+
+async function runServerCleanup({ creds, emit, shouldCancel }) {
+  const conn = new Client();
+  try {
+    emit.step('connect', 'running', '正在连接目标服务器');
+    await connectRemote(conn, creds);
+    ensureNotCancelled(shouldCancel);
+    emit.step('connect', 'success', 'SSH 已连接');
+    emit.progress(12, 'SSH 已连接');
+
+    emit.step('detect', 'running', '检测系统环境');
+    const osInfo = await runRemoteCommand(conn, 'cat /etc/os-release 2>/dev/null || uname -a', {
+      silent: true,
+      shouldCancel,
+    });
+    const summary = summarizeOs(osInfo.stdout || '');
+    if (summary) emit.log('info', `系统信息: ${summary}`);
+    emit.step('detect', 'success', '系统检测完成');
+    emit.progress(22, '开始清理部署数据');
+
+    emit.step('java-service', 'running', '停止并移除项目服务');
+    emit.step('nginx-config', 'running', '清理 Nginx 项目配置');
+    emit.step('prepare-dir', 'running', '删除项目站点目录与源码目录');
+    await runRemoteCommand(conn, buildCleanupCommand(creds), {
+      emit,
+      shouldCancel,
+    });
+
+    emit.step('java-service', 'success', '项目服务已处理');
+    emit.step('nginx-config', 'success', 'Nginx 配置已处理');
+    emit.step('prepare-dir', 'success', '目录与数据已处理');
+    emit.step('health', 'success', '清理检查完成');
+    emit.progress(100, '清理完成');
+  } finally {
+    try { conn.end(); } catch (_) {}
+  }
+}
 
 async function runOpsDeployment({ creds, emit, shouldCancel }) {
   const installCode = creds.opsInstallCode || OPS_INSTALL_CODE;
@@ -513,6 +664,18 @@ function validateCreds(c) {
   }
   if (!c.username) return { ok: false, message: '用户名不能为空' };
   if (!c.password) return { ok: false, message: '密码不能为空' };
+  return { ok: true };
+}
+
+function validateCleanupCreds(c) {
+  if (!c.host) return { ok: false, message: '服务器地址不能为空' };
+  if (!/^[a-zA-Z0-9\.\-\_]+$/.test(c.host)) return { ok: false, message: '服务器地址格式不合法' };
+  if (!Number.isInteger(c.port) || c.port < 1 || c.port > 65535) return { ok: false, message: 'SSH 端口不合法' };
+  if (!c.username) return { ok: false, message: '用户名不能为空' };
+  if (!c.password) return { ok: false, message: '密码不能为空' };
+  if (c.opsDbRootPassword && c.opsDbRootPassword.length > 128) {
+    return { ok: false, message: 'MySQL root 密码不能超过 128 个字符' };
+  }
   return { ok: true };
 }
 
@@ -714,6 +877,108 @@ function releaseDeployCard(cardId, lockId) {
   return true;
 }
 
+function loadServerAuthorizations() {
+  return loadJsonArray(SERVER_AUTHORIZATIONS_FILE);
+}
+
+function saveServerAuthorizations(rows) {
+  saveJsonArray(SERVER_AUTHORIZATIONS_FILE, rows);
+}
+
+function publicServerAuthorizations(rows) {
+  return rows.map((row) => ({
+    id: row.id,
+    host: row.host || '',
+    mode: row.mode || 'all',
+    permanent: !!row.permanent,
+    note: row.note || '',
+    createdAt: row.createdAt || '',
+    updatedAt: row.updatedAt || '',
+  }));
+}
+
+function upsertServerAuthorization(input) {
+  const host = normalizeAuthHost(input.host || input.ip || '');
+  if (!host) return { ok: false, message: '授权 IP/域名不能为空' };
+  if (!isValidAuthHost(host)) return { ok: false, message: '授权 IP/域名格式不合法' };
+  const mode = normalizeAuthMode(input.mode || 'all');
+  const permanent = !!input.permanent;
+  const note = String(input.note || '').trim().slice(0, 160);
+  const rows = loadServerAuthorizations();
+  const now = new Date().toISOString();
+  let row = rows.find((r) => normalizeAuthHost(r.host) === host);
+  if (row) {
+    row.mode = mode;
+    row.permanent = permanent;
+    row.note = note;
+    row.updatedAt = now;
+  } else {
+    row = {
+      id: crypto.randomBytes(12).toString('hex'),
+      host,
+      mode,
+      permanent,
+      note,
+      createdAt: now,
+      updatedAt: now,
+    };
+    rows.unshift(row);
+  }
+  saveServerAuthorizations(rows);
+  return { ok: true, authorization: row };
+}
+
+function deleteServerAuthorization(id) {
+  const value = String(id || '').trim();
+  const rows = loadServerAuthorizations();
+  const next = rows.filter((r) => r.id !== value);
+  if (next.length === rows.length) return { ok: false, message: '授权记录不存在' };
+  saveServerAuthorizations(next);
+  return { ok: true };
+}
+
+function findServerAuthorization(host, mode, aliases = []) {
+  const candidates = [host, ...aliases].map(normalizeAuthHost).filter(Boolean);
+  if (!candidates.length) return null;
+  const currentMode = normalizeAuthMode(mode || 'all');
+  return loadServerAuthorizations().find((row) => {
+    const rowHost = normalizeAuthHost(row.host);
+    if (!rowHost || !candidates.includes(rowHost)) return false;
+    const rowMode = normalizeAuthMode(row.mode || 'all');
+    return rowMode === 'all' || currentMode === 'all' || rowMode === currentMode;
+  }) || null;
+}
+
+function normalizeAuthHost(value) {
+  return String(value || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
+}
+
+function normalizeAuthMode(value) {
+  const mode = String(value || 'all').trim().toLowerCase();
+  return ['all', 'clean', 'card', 'ops'].includes(mode) ? mode : 'all';
+}
+
+function isValidAuthHost(value) {
+  const host = normalizeAuthHost(value);
+  if (!host || host.length > 253) return false;
+  return /^[a-z0-9][a-z0-9.\-_]*[a-z0-9]$|^[a-z0-9]$/i.test(host);
+}
+
+function buildLicenseConfigForTarget(creds) {
+  const aliases = [];
+  if (creds.opsServerName && creds.opsServerName !== '_') aliases.push(creds.opsServerName);
+  const matched = findServerAuthorization(creds.host, creds.deployMode, aliases);
+  return {
+    serverUrl: LICENSE_SERVER_URL,
+    host: normalizeAuthHost(creds.host),
+    mode: normalizeAuthMode(creds.deployMode),
+    authorized: !!matched,
+    permanent: !!(matched && matched.permanent),
+    groupUrl: AUTH_GROUP_URL,
+    groupName: '王者雷达共享开黑组队群',
+  };
+}
+
 function maskHost(host) {
   const value = String(host || '');
   if (!value) return '';
@@ -831,8 +1096,8 @@ function renderAdminPage() {
     .wrap{max-width:1320px;margin:0 auto;padding:28px 18px 48px}.top{display:flex;gap:16px;align-items:flex-end;justify-content:space-between;margin-bottom:18px}
     h1{margin:0;font-size:26px;letter-spacing:0}.muted{color:#93a4bd;font-size:13px}.hidden{display:none!important}
     .panel{background:#111a2e;border:1px solid #22304c;border-radius:8px;padding:14px;margin-bottom:14px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-    input{height:38px;min-width:180px;border:1px solid #314568;background:#070b16;color:#e8eefc;border-radius:6px;padding:0 12px}
-    input[type=number]{min-width:90px}button,a.btn{height:38px;border:0;border-radius:6px;background:#38bdf8;color:#06111f;font-weight:700;padding:0 14px;cursor:pointer;display:inline-flex;align-items:center;text-decoration:none}
+    input,select{height:38px;min-width:180px;border:1px solid #314568;background:#070b16;color:#e8eefc;border-radius:6px;padding:0 12px}
+    input[type=number]{min-width:90px}.check{min-width:auto;height:auto}button,a.btn{height:38px;border:0;border-radius:6px;background:#38bdf8;color:#06111f;font-weight:700;padding:0 14px;cursor:pointer;display:inline-flex;align-items:center;text-decoration:none}
     .ghost{background:#1e293b!important;color:#d8e5f8!important}.danger{background:#ef4444!important;color:white!important}.status{min-height:20px;margin-top:8px;color:#fbbf24;font-size:13px}
     .stats{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;margin:12px 0}.stat{background:#0f172a;border:1px solid #22304c;border-radius:8px;padding:12px}.stat strong{display:block;font-size:22px;color:#bae6fd}
     .table-wrap{overflow:auto;border:1px solid #22304c;border-radius:8px;background:#0f172a;margin-top:10px}table{width:100%;border-collapse:collapse;min-width:1180px}
@@ -900,6 +1165,29 @@ function renderAdminPage() {
         <div class="table-wrap" id="cards"></div>
       </section>
 
+      <section class="panel">
+        <div class="section-title">
+          <h2>服务器授权管理</h2>
+          <span class="muted">未授权服务器部署完成后可试用 1 天，页面会提示联系授权</span>
+        </div>
+        <form class="row" id="authForm">
+          <label for="authHost">IP/域名</label>
+          <input id="authHost" placeholder="例如 服务器IP或域名">
+          <label for="authMode">版本</label>
+          <select id="authMode">
+            <option value="all">全部版本</option>
+            <option value="clean">纯净版</option>
+            <option value="card">卡密版</option>
+            <option value="ops">运营版</option>
+          </select>
+          <label><input class="check" id="authPermanent" type="checkbox"> 永久授权</label>
+          <input id="authNote" placeholder="客户/备注，可留空">
+          <button type="submit">添加/更新授权</button>
+        </form>
+        <div class="status" id="authStatus"></div>
+        <div class="table-wrap" id="authorizations"></div>
+      </section>
+
       <section>
         <div class="section-title">
           <h2>已部署服务器信息</h2>
@@ -924,6 +1212,13 @@ function renderAdminPage() {
       cardStatus: document.getElementById('cardStatus'),
       newCards: document.getElementById('newCards'),
       cards: document.getElementById('cards'),
+      authForm: document.getElementById('authForm'),
+      authHost: document.getElementById('authHost'),
+      authMode: document.getElementById('authMode'),
+      authPermanent: document.getElementById('authPermanent'),
+      authNote: document.getElementById('authNote'),
+      authStatus: document.getElementById('authStatus'),
+      authorizations: document.getElementById('authorizations'),
       records: document.getElementById('records'),
       refresh: document.getElementById('refreshBtn'),
       logout: document.getElementById('logoutBtn'),
@@ -936,6 +1231,7 @@ function renderAdminPage() {
     };
     let latestRecords = [];
     let latestCards = [];
+    let latestAuthorizations = [];
     let latestNewCards = [];
     let token = sessionStorage.getItem('radar.adminToken') || '';
     function esc(v){return String(v ?? '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
@@ -987,7 +1283,9 @@ function renderAdminPage() {
       const data = await res.json();
       latestRecords = data.records || [];
       latestCards = data.cards || [];
+      latestAuthorizations = data.authorizations || [];
       renderCards(latestCards);
+      renderAuthorizations(latestAuthorizations);
       renderRecords(latestRecords);
       renderStats();
     }
@@ -1007,6 +1305,43 @@ function renderAdminPage() {
       els.newCards.textContent = latestNewCards.map(c => c.code).join('\\n');
       els.newCards.classList.toggle('hidden', !latestNewCards.length);
       els.cardStatus.textContent = '已生成 ' + latestNewCards.length + ' 张部署卡密';
+      await loadSummary();
+    }
+    async function saveAuthorization(){
+      els.authStatus.textContent = '正在保存授权...';
+      const res = await fetch('/api/admin/server-authorizations', {
+        method:'POST',
+        headers:authHeaders(),
+        body: JSON.stringify({
+          host: els.authHost.value.trim(),
+          mode: els.authMode.value,
+          permanent: els.authPermanent.checked,
+          note: els.authNote.value.trim()
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        els.authStatus.textContent = data.message || '保存授权失败';
+        return;
+      }
+      els.authStatus.textContent = '授权已保存';
+      els.authHost.value = '';
+      els.authNote.value = '';
+      els.authPermanent.checked = false;
+      await loadSummary();
+    }
+    async function deleteAuthorization(id){
+      if (!confirm('确定取消这个服务器授权吗？取消后普通授权目标刷新页面会提示需要授权。')) return;
+      const res = await fetch('/api/admin/server-authorizations/' + encodeURIComponent(id), {
+        method:'DELETE',
+        headers:authHeaders()
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        els.authStatus.textContent = data.message || '取消授权失败';
+        return;
+      }
+      els.authStatus.textContent = '已取消授权';
       await loadSummary();
     }
     function renderStats(){
@@ -1030,6 +1365,22 @@ function renderAdminPage() {
           '<td>'+esc(fmtTime(c.usedAt || c.lockedAt || ''))+'</td>' +
           '<td>'+esc(c.deployMode || '')+'</td>' +
           '<td><button class="copy" data-card="'+i+'">复制</button></td>' +
+        '</tr>').join('') + '</tbody></table>';
+    }
+    function renderAuthorizations(rows){
+      if (!rows.length) {
+        els.authorizations.innerHTML = '<div class="empty">暂无授权 IP/域名，部署后会提示需要授权</div>';
+        return;
+      }
+      const modeText = {all:'全部版本', clean:'纯净版', card:'卡密版', ops:'运营版'};
+      els.authorizations.innerHTML = '<table><thead><tr><th>IP/域名</th><th>版本</th><th>授权类型</th><th>备注</th><th>更新时间</th><th>操作</th></tr></thead><tbody>' +
+        rows.map((r) => '<tr>' +
+          '<td>'+value(r.host)+'</td>' +
+          '<td>'+esc(modeText[r.mode] || r.mode || '全部版本')+'</td>' +
+          '<td>'+esc(r.permanent ? '永久授权' : '在线授权')+'</td>' +
+          '<td>'+esc(r.note || '')+'</td>' +
+          '<td>'+esc(fmtTime(r.updatedAt || r.createdAt))+'</td>' +
+          '<td><button class="copy danger" data-auth-delete="'+esc(r.id)+'">取消授权</button></td>' +
         '</tr>').join('') + '</tbody></table>';
     }
     function renderRecords(records){
@@ -1079,6 +1430,11 @@ function renderAdminPage() {
     document.addEventListener('click', e => {
       const recordBtn = e.target.closest('[data-copy]');
       const cardBtn = e.target.closest('[data-card]');
+      const authDeleteBtn = e.target.closest('[data-auth-delete]');
+      if (authDeleteBtn) {
+        deleteAuthorization(authDeleteBtn.dataset.authDelete).catch(err => els.authStatus.textContent = err.message || '取消授权失败');
+        return;
+      }
       if (!recordBtn && !cardBtn) return;
       const btn = recordBtn || cardBtn;
       const text = recordBtn
@@ -1091,6 +1447,7 @@ function renderAdminPage() {
     els.loginForm.addEventListener('submit', e => {e.preventDefault(); login().catch(err => els.status.textContent = err.message || '登录失败');});
     els.loginBtn.addEventListener('click', e => {e.preventDefault(); login().catch(err => els.status.textContent = err.message || '登录失败');});
     els.cardForm.addEventListener('submit', e => {e.preventDefault(); createCards().catch(err => els.cardStatus.textContent = err.message || '生成失败');});
+    els.authForm.addEventListener('submit', e => {e.preventDefault(); saveAuthorization().catch(err => els.authStatus.textContent = err.message || '保存授权失败');});
     els.refresh.addEventListener('click', () => loadSummary().catch(err => els.status.textContent = err.message || '读取失败'));
     els.logout.addEventListener('click', async () => {
       try { await fetch('/api/admin/logout', {method:'POST', headers:authHeaders()}); } catch (_) {}
@@ -1209,12 +1566,18 @@ function buildEnsureCurlCommand() {
     'set -e',
     'if ! command -v curl >/dev/null 2>&1; then',
     'echo "正在安装 curl 下载工具"',
-    'if command -v apt-get >/dev/null 2>&1; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y curl;',
-    'elif command -v dnf >/dev/null 2>&1; then dnf install -y curl;',
-    'elif command -v yum >/dev/null 2>&1; then yum install -y curl;',
-    'else echo "未找到可用包管理器安装 curl"; exit 1; fi',
+    'if command -v apt-get >/dev/null 2>&1; then',
+    'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y curl',
+    'elif command -v dnf >/dev/null 2>&1; then',
+    'dnf install -y curl',
+    'elif command -v yum >/dev/null 2>&1; then',
+    'yum install -y curl',
+    'else',
+    'echo "未找到可用包管理器安装 curl"',
+    'exit 1',
     'fi',
-  ].join(' ');
+    'fi',
+  ].join('\n');
   return `bash -lc ${shQuote(body)}`;
 }
 
@@ -1231,6 +1594,10 @@ function buildOpsInstallCommand(creds, installCode) {
   if (creds.opsDbRootPassword) args.push(`--db-root-password ${shQuote(creds.opsDbRootPassword)}`);
   if (creds.opsDbPassword) args.push(`--db-password ${shQuote(creds.opsDbPassword)}`);
   if (creds.opsAdminPassword) args.push(`--admin-password ${shQuote(creds.opsAdminPassword)}`);
+  args.push(`--license-host ${shQuote(creds.host)}`);
+  args.push(`--license-server ${shQuote(LICENSE_SERVER_URL)}`);
+  args.push(`--license-group-url ${shQuote(AUTH_GROUP_URL)}`);
+  if (creds.licenseConfig && creds.licenseConfig.permanent) args.push('--license-permanent');
   args.push('-y');
   const body = [
     'set -e',
@@ -1240,6 +1607,86 @@ function buildOpsInstallCommand(creds, installCode) {
     args.join(' '),
   ].join('; ');
   return `bash -lc ${shQuote(body)}`;
+}
+
+function buildCleanupCommand(creds) {
+  const hostLabel = safeHostLabel(creds.host);
+  const dbRootPassword = creds.opsDbRootPassword || '';
+  const body = [
+    'set -e',
+    `HOST_LABEL=${shQuote(hostLabel)}`,
+    `DB_ROOT_PASSWORD=${shQuote(dbRootPassword)}`,
+    'echo "正在清理本项目服务和安装痕迹"',
+    'for svc in radar-java home-server restore-whitelist wzry-home-server wzry-home-watchdog; do',
+    '  systemctl disable --now "$svc.service" >/dev/null 2>&1 || true',
+    'done',
+    'systemctl disable --now wzry-home-watchdog.timer >/dev/null 2>&1 || true',
+    'pkill -9 -f "/www/server/radar-java/wz.jar" >/dev/null 2>&1 || true',
+    'pkill -9 -f "home-server-0.0.1-SNAPSHOT.jar" >/dev/null 2>&1 || true',
+    'rm -f /etc/systemd/system/radar-java.service',
+    'rm -f /etc/systemd/system/home-server.service',
+    'rm -f /etc/systemd/system/restore-whitelist.service',
+    'rm -f /etc/systemd/system/wzry-home-server.service',
+    'rm -f /etc/systemd/system/wzry-home-watchdog.service',
+    'rm -f /etc/systemd/system/wzry-home-watchdog.timer',
+    'systemctl daemon-reload >/dev/null 2>&1 || true',
+    'rm -f /usr/local/bin/ws-whitelist-helper.sh /etc/sudoers.d/ws-whitelist /etc/cron.d/radar-whitelist-cleanup /var/log/radar-whitelist-cleanup.log',
+    'ipset destroy ws_whitelist >/dev/null 2>&1 || true',
+    'rm -f /etc/nginx/conf.d/00-wzry-space.conf /etc/nginx/conf.d/01-wzry-space-ws.conf',
+    'rm -f "/etc/nginx/conf.d/00-radar_${HOST_LABEL}.conf"',
+    'rm -f "/etc/nginx/sites-enabled/radar_${HOST_LABEL}.conf" "/etc/nginx/sites-available/radar_${HOST_LABEL}.conf"',
+    'rm -f "/www/server/panel/vhost/nginx/${HOST_LABEL}.conf"',
+    'RECEIPT=/root/wzry-space-install.env',
+    'SRC_DIR=/opt/wzry-space-src',
+    'SITE_DIR=/www/wwwroot/wzry-space',
+    'DB_NAME=wzry_space',
+    'DB_USER=wzry_space',
+    'if [ -f "$RECEIPT" ]; then',
+    '  while IFS= read -r line; do',
+    '    case "$line" in',
+    '      SRC_DIR=*) SRC_DIR="${line#SRC_DIR=}" ;;',
+    '      SITE_DIR=*) SITE_DIR="${line#SITE_DIR=}" ;;',
+    '      DB_NAME=*) DB_NAME="${line#DB_NAME=}" ;;',
+    '      DB_USER=*) DB_USER="${line#DB_USER=}" ;;',
+    '    esac',
+    '  done < "$RECEIPT"',
+    'fi',
+    'SAFE_SITE_BY_HOST="/www/wwwroot/${HOST_LABEL}"',
+    'safe_rm_dir() {',
+    '  local target="$1"',
+    '  case "$target" in',
+    '    /opt/wzry-space-src|/www/wwwroot/wzry-space|"$SAFE_SITE_BY_HOST"|/www/server/radar-java)',
+    '      [ -n "$target" ] && rm -rf -- "$target"',
+    '      echo "已清理目录: $target"',
+    '      ;;',
+    '    *)',
+    '      echo "跳过非项目目录: $target"',
+    '      ;;',
+    '  esac',
+    '}',
+    'safe_rm_dir /www/server/radar-java',
+    'safe_rm_dir "$SAFE_SITE_BY_HOST"',
+    'safe_rm_dir "$SRC_DIR"',
+    'safe_rm_dir "$SITE_DIR"',
+    'rm -f "$RECEIPT"',
+    'drop_mysql() {',
+    '  command -v mysql >/dev/null 2>&1 || return 0',
+    '  printf "%s" "$DB_NAME" | grep -Eq "^[A-Za-z0-9_]+$" || return 0',
+    '  printf "%s" "$DB_USER" | grep -Eq "^[A-Za-z0-9_]+$" || return 0',
+    "  local sql=\"DROP DATABASE IF EXISTS \\`${DB_NAME}\\`; DROP USER IF EXISTS '${DB_USER}'@'localhost'; DROP USER IF EXISTS '${DB_USER}'@'127.0.0.1'; FLUSH PRIVILEGES;\"",
+    '  if [ -n "$DB_ROOT_PASSWORD" ]; then MYSQL_PWD="$DB_ROOT_PASSWORD" mysql -u root -e "$sql" || true',
+    '  else mysql -u root -e "$sql" || true',
+    '  fi',
+    '}',
+    'drop_mysql',
+    'if command -v nginx >/dev/null 2>&1; then nginx -t >/dev/null 2>&1 && (systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1 || true) || true; fi',
+    'echo "服务器项目数据清理完成"',
+  ].join('\n');
+  return `bash -lc ${shQuote(body)}`;
+}
+
+function safeHostLabel(host) {
+  return String(host || '').replace(/[^a-zA-Z0-9.\-_]/g, '_') || 'server';
 }
 
 function createOpsStageTracker(emit) {
