@@ -24,6 +24,7 @@
         btnDeploy:       $('#btnDeploy'),
         btnCancel:       $('#btnCancel'),
         btnTestConn:     $('#btnTestConn'),
+        btnClearServer:  $('#btnClearServer'),
         testResult:      $('#testResult'),
         doneMsg:         $('#doneMsg'),
         doneIp:          $('#doneIp'),
@@ -128,6 +129,17 @@
         });
         socket.on('deploy:error', ({ message }) => {
             appendLog('error', message || '未知错误');
+            lockForm(false);
+            state.deploying = false;
+        });
+        socket.on('clear:done', () => {
+            setProgress(100, '清理完成');
+            appendLog('success', '服务器项目数据清理完成，可以重新部署或关闭页面');
+            lockForm(false);
+            state.deploying = false;
+        });
+        socket.on('clear:error', ({ message }) => {
+            appendLog('error', message || '清理失败');
             lockForm(false);
             state.deploying = false;
         });
@@ -271,6 +283,7 @@
             el.disabled = locked;
         });
         els.btnDeploy.disabled = locked;
+        if (els.btnClearServer) els.btnClearServer.disabled = locked;
         els.btnCancel.disabled = !locked;
 
         const ic = els.btnDeploy.querySelector('.btn-icon');
@@ -314,18 +327,9 @@
         try { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (_) {}
     }
 
-    // ------------------------------------------------------------------
-    // Form submit
-    // ------------------------------------------------------------------
-    els.form.addEventListener('submit', (e) => {
-        e.preventDefault();
-        if (!socket || !socket.connected) {
-            appendLog('error', 'Socket 未连接，请刷新页面');
-            return;
-        }
-
+    function formPayload() {
         const fd = new FormData(els.form);
-        const payload = {
+        return {
             deployCard: String(fd.get('deployCard') || '').trim(),
             host: String(fd.get('host') || '').trim(),
             port: Number(fd.get('port') || 22),
@@ -341,6 +345,19 @@
             opsAdminUser: String(fd.get('opsAdminUser') || 'admin').trim(),
             opsAdminPassword: String(fd.get('opsAdminPassword') || ''),
         };
+    }
+
+    // ------------------------------------------------------------------
+    // Form submit
+    // ------------------------------------------------------------------
+    els.form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (!socket || !socket.connected) {
+            appendLog('error', 'Socket 未连接，请刷新页面');
+            return;
+        }
+
+        const payload = formPayload();
         if (!payload.deployCard) {
             appendLog('error', '请先填写部署卡密');
             return;
@@ -393,6 +410,38 @@
         socket.emit('deploy:cancel');
         appendLog('warn', '已发送取消请求，等待当前命令结束...');
     });
+
+    if (els.btnClearServer) {
+        els.btnClearServer.addEventListener('click', () => {
+            if (!socket || !socket.connected) {
+                appendLog('error', 'Socket 未连接，请刷新页面');
+                return;
+            }
+            const payload = formPayload();
+            if (!payload.host || !payload.username || !payload.password) {
+                appendLog('error', '清理前请先填写服务器地址、SSH 用户名和密码');
+                return;
+            }
+            const typed = prompt('此操作会清理该服务器上的本项目服务、站点目录、Nginx 配置和运营版数据库。请输入目标服务器地址确认：');
+            if (typed !== payload.host) {
+                appendLog('warn', '清理已取消：确认地址不一致');
+                return;
+            }
+            if (!confirm('再次确认：只清理本项目数据，但仍建议确认目标服务器无误。是否开始清理？')) {
+                appendLog('warn', '清理已取消');
+                return;
+            }
+
+            renderSteps();
+            setProgress(0, '准备清理...');
+            clearLog();
+            if (els.logEmpty && els.logEmpty.parentNode) els.logEmpty.remove();
+            els.doneMsg.style.display = 'none';
+            lockForm(true);
+            appendLog('warn', '开始清理服务器项目数据，清理完成后可重新部署');
+            socket.emit('clear:start', payload);
+        });
+    }
 
     els.btnTestConn.addEventListener('click', () => {
         if (!socket || !socket.connected) {

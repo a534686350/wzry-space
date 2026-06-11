@@ -46,3 +46,10 @@ __pycache__/
 
 # Local installer secrets
 .install-code.txt
+
+# One-click deployer runtime files
+一键部署器/node_modules/
+一键部署器/data/
+一键部署器/logs/
+一键部署器/.env*
+一键部署器/npm-debug.log*

@@ -2,7 +2,7 @@
 
 上传 `yuanma` 文件夹到网站根目录，访问：
 
-`http://101.200.36.103/yuanma/admin.php`
+`http://你的服务器IP或域名/yuanma/admin.php`
 
 默认后台密码在 `config.php`：
 
@@ -12,7 +12,7 @@
 
 APK 启动时会自动请求：
 
-`http://101.200.36.103/yuanma/api.php?action=config`
+`http://你的服务器IP或域名/yuanma/api.php?action=config`
 
 后台可以配置：
 
