@@ -1225,15 +1225,6 @@ if ($module !== '') {
         .radar-ws-hud-sep { opacity: 0.45; margin: 0 8px; }
         #wsLatencyText { color: #cbd5e1; }
         #wsReconnectText { color: #94a3b8; }
-        .radar-scroll-hint {
-            font-size: 11px;
-            color: #94a3b8;
-            margin-top: 6px;
-            text-align: center;
-            line-height: 1.5;
-            user-select: none;
-        }
-        
         /* Canvas旋转样式 */
         .rotate0{transform: rotate(0deg);}
         .rotate180{transform: rotate(180deg);}
@@ -1401,7 +1392,6 @@ if ($module !== '') {
             <div class="radar-ws-hud" id="radarWsHud" title="共享延迟：需 gameData 包末尾带 ###ST:13位毫秒时间戳（由共享端或 Jar 在打包时写入）；无则显示「同步延迟」（网页拉取往返）。重连：断线后自动连上次数（不含首次）">
                 <span id="wsLatencyText">共享延迟: --</span><span class="radar-ws-hud-sep" aria-hidden="true">|</span><span id="wsReconnectText">重连: 0</span>
             </div>
-            <p class="radar-scroll-hint" role="note">往下滑加群交流反馈</p>
         </section>
 
         <!-- 侧边栏切换按钮（固定在右侧顶部，可拖动） -->
@@ -1517,10 +1507,7 @@ if ($module !== '') {
                     <span class="panel-collapsible-icon" id="roomListIcon" aria-hidden="true">▼</span>
                 </button>
                 <div class="panel-collapsible-content" id="roomListContent">
-                    <div style="display:flex;gap:8px;margin-bottom:10px;">
-                        <input type="text" id="manualRoomInput" placeholder="输入房间号" style="flex:1;min-width:0;height:34px;border-radius:8px;border:1px solid rgba(74,158,255,.35);background:rgba(15,23,42,.75);color:#fff;padding:0 10px;font-size:13px;">
-                        <button type="button" id="btnManualRoomConnect" style="height:34px;padding:0 12px;border:0;border-radius:8px;background:#3b82f6;color:#fff;font-size:13px;cursor:pointer;">连接</button>
-                    </div>
+                    <div style="font-size:12px;color:#94a3b8;margin-bottom:10px;">点击下方房间号连接</div>
                     <div id="roomListContainer">
                         <div class="list" id="homeList"></div>
                     </div>
@@ -1563,29 +1550,6 @@ if ($module !== '') {
                 </div>
             </div>
 
-            <!-- 加Q群卡片（登录后显示） -->
-            <div class="panel panel-collapsible" id="qqGroupPanel" style="display:none;">
-                <button type="button" class="panel-collapsible-toggle" id="qqGroupToggle" aria-expanded="false" aria-controls="qqGroupContent">
-                    <span class="panel-collapsible-title">加入Q群获取支持</span>
-                    <span class="panel-collapsible-icon" id="qqGroupIcon" aria-hidden="true">▶</span>
-                </button>
-                <div class="panel-collapsible-content" id="qqGroupContent" hidden>
-                    <div style="font-size:12px;color:#94a3b8;line-height:1.6;margin-bottom:10px;">
-                        点击下方按钮跳转加入QQ群，获取技术支持与更新公告。
-                    </div>
-                    <button
-                        id="btnJoinQGroup"
-                        type="button"
-                        class="share-link-btn"
-                        style="width:100%;"
-                        data-url="https://qm.qq.com/q/bhZLKSPN6w"
-                        data-group-id="1072788749"
-                    >跳转加Q群</button>
-                    <div class="share-link-tip" style="margin-top:10px;">
-                    </div>
-                </div>
-            </div>
-            
             <!-- 消息提示 -->
             <div id="errorMessage" class="message error" style="display:none;"></div>
             <div id="successMessage" class="message success" style="display:none;"></div>
@@ -1616,6 +1580,10 @@ if ($module !== '') {
                 __shareTokenMode = false;
             }
         })();
+
+        function getRadarLoginMode() {
+            return String(window.RADAR_LOGIN_MODE || 'ops').toLowerCase();
+        }
         
         // 初始化应用（去除授权，直接连接服务器）
         function initApp() {
@@ -1623,7 +1591,7 @@ if ($module !== '') {
             updateTime();
 
             // 分享token模式下跳过用户信息与相关 UI（避免无登录会话触发多余请求）
-            if (!__shareTokenMode) {
+            if (!__shareTokenMode && getRadarLoginMode() === 'ops') {
                 // 加载当前登录用户信息（到期时间等）
                 loadUserProfile();
             }
@@ -1720,9 +1688,6 @@ if ($module !== '') {
             if (!panel) return;
             panel.style.display = 'block';
 
-            // 展示“加入Q群”卡片（无论是否拿到用户信息，也尽量让按钮可用）
-            initQQGroupPanel();
-
             var output = document.getElementById('shareLinkOutput');
             var btnGen = document.getElementById('btnGenerateShareLink');
             var btnCopy = document.getElementById('btnCopyShareLink');
@@ -1805,36 +1770,6 @@ if ($module !== '') {
             }
         }
 
-        function initQQGroupPanel() {
-            var qqPanel = document.getElementById('qqGroupPanel');
-            if (qqPanel) qqPanel.style.display = 'block';
-            var btnJoin = document.getElementById('btnJoinQGroup');
-            if (btnJoin && !btnJoin._bound) {
-                btnJoin._bound = true;
-                btnJoin.onclick = function() {
-                    var url = btnJoin.getAttribute('data-url') || '';
-                    var groupId = btnJoin.getAttribute('data-group-id') || '';
-                    if (!url || url === '#') {
-                        if (!groupId) {
-                            showError('请先在代码中配置QQ群：修改按钮 data-group-id 为你的群号', 4000);
-                            return;
-                        }
-                        // 邀请链接缺失时：打开QQ群查找页 + 尝试复制群号
-                        try {
-                            if (navigator.clipboard && navigator.clipboard.writeText) {
-                                navigator.clipboard.writeText(groupId);
-                            }
-                        } catch (e) {}
-                        showSuccess('已复制群号并打开QQ群查找页（' + groupId + '）', 2500);
-                        var findUrl = 'https://id.qq.com/groupv2/?word=' + encodeURIComponent(groupId);
-                        window.open(findUrl, '_blank', 'noopener');
-                        return;
-                    }
-                    window.open(url, '_blank', 'noopener');
-                };
-            }
-        }
-        
         function setMainEntryBlockedOverlay(msg) {
             try {
                 if (window.__mainEntry503Shown) return;
@@ -1878,8 +1813,26 @@ if ($module !== '') {
             return Promise.resolve(false);
         }
 
-        // 页面加载时先校验访问权限（卡密未过期且未删除），未通过则跳转登录页。
+        // 页面加载时按版本选择登录逻辑：运营版走后台登录，卡密版走卡密脚本，纯净版直接进入。
         window.addEventListener('DOMContentLoaded', function() {
+            var loginMode = getRadarLoginMode();
+
+            if (loginMode === 'clean') {
+                initApp();
+                return;
+            }
+
+            if (loginMode === 'card') {
+                setTimeout(function() {
+                    if (window.CardAuth && typeof window.CardAuth.refresh === 'function') {
+                        window.CardAuth.refresh();
+                    } else {
+                        showError('卡密登录脚本未加载，请检查 layui/auth.js');
+                    }
+                }, 0);
+                return;
+            }
+
             var currentUrl = new URL(window.location.href);
             var shareToken = currentUrl.searchParams.get('token') || '';
             var checkAccessUrl = 'api/index.php?module=check_access&_=' + Date.now();
@@ -1897,8 +1850,6 @@ if ($module !== '') {
                 .then(function(res) {
                     if (res === null) return;
                     if (res && res.allowed === true) {
-                        // 分享 token/未登录情况下也展示“加入Q群”卡片
-                        initQQGroupPanel();
                         initApp();
                         // 分享token模式下跳过公告拉取，避免额外并发请求影响共享传输稳定性
                         if (!__shareTokenMode) {
@@ -1937,7 +1888,8 @@ if ($module !== '') {
         // 默认使用当前 hostname + 端口 8888，例如 http://192.168.1.10 打开页面时，连接 ws://192.168.1.10:8888/ws
         var ip = (function() {
             var host = window.location.hostname;
-            var port = '8888'; // 如需修改端口，在此修改即可
+            var sameOriginWs = window.RADAR_WS_SAME_ORIGIN === true;
+            var port = sameOriginWs ? (window.location.port || (window.location.protocol === 'https:' ? '443' : '80')) : '8888';
             if (!host || host === '') {
                 host = '127.0.0.1';
             }
@@ -5346,41 +5298,6 @@ if ($module !== '') {
             return total;
         }
 
-        function connectManualRoom() {
-            var input = document.getElementById('manualRoomInput');
-            var roomId = input && input.value ? input.value.trim() : '';
-            if (!roomId) {
-                showError('请输入房间号');
-                return;
-            }
-            var serverHost = findServerForRoom(roomId);
-            if (!serverHost && /^[0-9]+$/.test(roomId)) {
-                var paddedRoomId = roomId.padStart(6, '0');
-                serverHost = findServerForRoom(paddedRoomId);
-                if (serverHost) roomId = paddedRoomId;
-            }
-            if (!serverHost) {
-                if (getKnownRoomCount() > 0) {
-                    showError('房间不存在或已关闭: ' + roomId);
-                } else {
-                    showError('房间列表还没加载，请先刷新房间');
-                }
-                return;
-            }
-            buttonClicked(roomId, serverHost);
-        }
-
-        function initManualRoomConnect() {
-            var input = document.getElementById('manualRoomInput');
-            var btn = document.getElementById('btnManualRoomConnect');
-            if (btn) btn.onclick = connectManualRoom;
-            if (input) {
-                input.addEventListener('keydown', function(e) {
-                    if (e.key === 'Enter') connectManualRoom();
-                });
-            }
-        }
-        
         function loadCachedData() {
             try {
                 var cachedRooms = getFromCache('roomList');
@@ -5424,15 +5341,12 @@ if ($module !== '') {
         window.addEventListener('DOMContentLoaded', function() {
             loadCachedData();
             setTimeout(loadGameServersForFront, 300);
-            initManualRoomConnect();
             initUserInfoPanelCollapse();
             initHeroSkillPanelCollapse();
             initCollapsiblePanel('roomListToggle', 'roomListContent', 'roomListIcon');
             initCollapsiblePanel('shareLinkToggle', 'shareLinkContent', 'shareLinkIcon');
             initCollapsiblePanel('mapCalibToggle', 'mapCalibContent', 'mapCalibIcon');
             initMapCalibrationPanel();
-            initCollapsiblePanel('qqGroupToggle', 'qqGroupContent', 'qqGroupIcon');
-
             // 英雄、兵线、野怪子折叠面板（互斥展开）
             function initOffsetPanel(toggleId, contentId, iconId) {
                 var toggle = document.getElementById(toggleId);

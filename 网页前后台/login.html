@@ -611,6 +611,21 @@
             BUY_CARD_URL: 'https://vi.dwx888.com/links/C7CF2798'
         };
 
+        function normalizeLinkUrl(url) {
+            var raw = String(url || '').trim();
+            if (!raw) return '';
+            if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+            if (raw.charAt(0) === '/' || raw.charAt(0) === '#' || raw.indexOf('./') === 0 || raw.indexOf('../') === 0) return raw;
+            var hostPart = raw.split(/[\/?#]/, 1)[0];
+            if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(hostPart) || /^localhost(:\d+)?$/i.test(hostPart)) return 'https://' + raw;
+            if (hostPart.indexOf('.') !== -1) {
+                var suffix = hostPart.split('.').pop().toLowerCase().replace(/:\d+$/, '');
+                var fileExtensions = ['html', 'htm', 'php', 'asp', 'aspx', 'jsp', 'json', 'xml', 'txt', 'apk', 'zip', 'rar', '7z', 'js', 'css', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'];
+                if (fileExtensions.indexOf(suffix) === -1) return 'https://' + raw;
+            }
+            return raw;
+        }
+
         var MSG = {
             NETWORK_ERROR: '网络错误，请稍后重试',
             NON_JSON_RESPONSE: '接口返回非JSON数据，请联系管理员',
@@ -667,20 +682,23 @@
 
         function applyAppLinkSettings() {
             var trial = document.getElementById('btnClaimTrial');
-            if (trial && CONFIG.TRIAL_URL) {
-                trial.href = CONFIG.TRIAL_URL;
+            var trialUrl = normalizeLinkUrl(CONFIG.TRIAL_URL);
+            if (trial && trialUrl) {
+                trial.href = trialUrl;
                 trial.target = '_blank';
                 trial.rel = 'noopener';
             }
             var down = document.getElementById('linkDownloadApp');
-            if (down && CONFIG.APP_DOWNLOAD_URL) {
-                down.href = CONFIG.APP_DOWNLOAD_URL;
+            var downloadUrl = normalizeLinkUrl(CONFIG.APP_DOWNLOAD_URL);
+            if (down && downloadUrl) {
+                down.href = downloadUrl;
                 down.target = '_blank';
                 down.rel = 'noopener';
             }
             var buy = document.getElementById('linkBuyCard');
-            if (buy && CONFIG.BUY_CARD_URL) {
-                buy.href = CONFIG.BUY_CARD_URL;
+            var buyUrl = normalizeLinkUrl(CONFIG.BUY_CARD_URL);
+            if (buy && buyUrl) {
+                buy.href = buyUrl;
                 buy.target = '_blank';
                 buy.rel = 'noopener';
             }
@@ -690,9 +708,9 @@
             .then(function(r) { return r.json(); })
             .then(function(res) {
                 var d = res && res.code === 0 ? (res.data || {}) : {};
-                if (d.trial_url !== undefined) CONFIG.TRIAL_URL = d.trial_url || '';
-                if (d.buy_card_url !== undefined) CONFIG.BUY_CARD_URL = d.buy_card_url || '';
-                if (d.download_url !== undefined) CONFIG.APP_DOWNLOAD_URL = d.download_url || '';
+                if (d.trial_url !== undefined) CONFIG.TRIAL_URL = normalizeLinkUrl(d.trial_url || '');
+                if (d.buy_card_url !== undefined) CONFIG.BUY_CARD_URL = normalizeLinkUrl(d.buy_card_url || '');
+                if (d.download_url !== undefined) CONFIG.APP_DOWNLOAD_URL = normalizeLinkUrl(d.download_url || '');
                 applyAppLinkSettings();
             })
             .catch(function() { applyAppLinkSettings(); });
@@ -857,13 +875,14 @@
         (function initDownloadApp() {
             var a = document.getElementById('linkDownloadApp');
             if (!a) return;
-            if (!CONFIG.APP_DOWNLOAD_URL) {
+            var downloadUrl = normalizeLinkUrl(CONFIG.APP_DOWNLOAD_URL);
+            if (!downloadUrl) {
                 a.textContent = '下载客户端';
                 a.href = '#';
                 a.onclick = function(e){ e.preventDefault(); };
             } else {
                 a.textContent = '下载客户端';
-                a.href = CONFIG.APP_DOWNLOAD_URL;
+                a.href = downloadUrl;
                 a.target = '_blank';
                 a.rel = 'noopener';
             }
@@ -872,13 +891,14 @@
         (function initBuyCardLink() {
             var a = document.getElementById('linkBuyCard');
             if (!a) return;
-            if (!CONFIG.BUY_CARD_URL) {
+            var buyUrl = normalizeLinkUrl(CONFIG.BUY_CARD_URL);
+            if (!buyUrl) {
                 a.textContent = '购买卡密';
                 a.href = '#';
                 a.onclick = function(e){ e.preventDefault(); };
             } else {
                 a.textContent = '购买卡密';
-                a.href = CONFIG.BUY_CARD_URL;
+                a.href = buyUrl;
                 a.target = '_blank';
                 a.rel = 'noopener';
             }
@@ -1013,8 +1033,9 @@
             var deviceId = getTrialDeviceId();
             btn.addEventListener('click', function(e) {
                 e.preventDefault();
-                if (CONFIG.TRIAL_URL) {
-                    window.open(CONFIG.TRIAL_URL, '_blank', 'noopener');
+                var trialUrl = normalizeLinkUrl(CONFIG.TRIAL_URL);
+                if (trialUrl) {
+                    window.open(trialUrl, '_blank', 'noopener');
                     return;
                 }
                 setMsg(msg, '', '');

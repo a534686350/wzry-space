@@ -126,7 +126,7 @@ async function main() {
     } catch (_) {
       const os = (await sshExec(conn, 'cat /etc/os-release 2>/dev/null | grep ^ID=')).trim();
       if (os.includes('ubuntu') || os.includes('debian')) {
-        await sshExec(conn, 'curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs');
+        await sshExec(conn, 'curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y nodejs');
       } else {
         await sshExec(conn, 'curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - && (yum install -y nodejs || dnf install -y nodejs)');
       }

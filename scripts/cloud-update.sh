@@ -8,6 +8,7 @@ SOURCE="${REPO_SOURCE:-gitee}"
 BRANCH="${REPO_BRANCH:-main}"
 SRC_DIR="${SRC_DIR:-/opt/wzry-space-src}"
 SITE_DIR="${SITE_DIR:-/www/wwwroot/wzry-space}"
+SITE_PORT="${SITE_PORT:-85}"
 LICENSE_SERVER="${LICENSE_SERVER:-http://ld.llqq520.xyz}"
 LICENSE_GROUP_URL="${LICENSE_GROUP_URL:-https://qm.qq.com/q/VcaTE1qumQ}"
 LICENSE_HOST="${LICENSE_HOST:-}"
@@ -86,6 +87,7 @@ read_install_receipt() {
             BRANCH) [[ "$BRANCH_SET" == "0" && -n "$value" ]] && BRANCH="$value" ;;
             SRC_DIR) [[ "$SRC_DIR_SET" == "0" && -n "$value" ]] && SRC_DIR="$value" ;;
             SITE_DIR) [[ "$SITE_DIR_SET" == "0" && -n "$value" ]] && SITE_DIR="$value" ;;
+            SITE_PORT) [[ -n "$value" ]] && SITE_PORT="$value" ;;
             LICENSE_SERVER) [[ -n "$value" ]] && LICENSE_SERVER="$value" ;;
             LICENSE_GROUP_URL) [[ -n "$value" ]] && LICENSE_GROUP_URL="$value" ;;
             LICENSE_HOST) [[ -n "$value" ]] && LICENSE_HOST="$value" ;;
@@ -112,8 +114,14 @@ ensure_tools() {
         return
     fi
     if command -v apt-get >/dev/null 2>&1; then
+        export DEBIAN_FRONTEND=noninteractive
+        export APT_LISTCHANGES_FRONTEND=none
+        export NEEDRESTART_MODE=a
         apt-get update
-        apt-get install -y git rsync ca-certificates
+        apt-get \
+            -o Dpkg::Options::=--force-confdef \
+            -o Dpkg::Options::=--force-confold \
+            install -y git rsync ca-certificates
     elif command -v dnf >/dev/null 2>&1; then
         dnf install -y git rsync ca-certificates
     elif command -v yum >/dev/null 2>&1; then
@@ -334,13 +342,23 @@ server_host() {
     fi
 }
 
+site_base_url() {
+    local host port_suffix
+    host="$(server_host)"
+    port_suffix=""
+    if [[ "$SITE_PORT" != "80" ]]; then
+        port_suffix=":$SITE_PORT"
+    fi
+    printf 'http://%s%s\n' "$host" "$port_suffix"
+}
+
 latest_apk_name() {
     find "$SITE_DIR/apk" -maxdepth 1 -type f -name 'ALinRadar-v*.apk' -printf '%f\n' 2>/dev/null | sort -V | tail -n 1
 }
 
 print_summary() {
-    local host app_file commit
-    host="$(server_host)"
+    local base_url app_file commit
+    base_url="$(site_base_url)"
     app_file="$(latest_apk_name)"
     commit="$(git -C "$SRC_DIR" rev-parse --short HEAD 2>/dev/null || true)"
 
@@ -348,10 +366,10 @@ print_summary() {
     green "  远程更新完成"
     green "========================================"
     printf '当前源码版本：      %s\n' "${commit:-unknown}"
-    printf '你的前台地址是：    http://%s/\n' "$host"
-    printf '你的后台地址是：    http://%s/admin/\n' "$host"
+    printf '你的前台地址是：    %s/\n' "$base_url"
+    printf '你的后台地址是：    %s/admin/\n' "$base_url"
     if [[ -n "$app_file" ]]; then
-        printf 'APP 下载路径是：    http://%s/apk/%s\n' "$host" "$app_file"
+        printf 'APP 下载路径是：    %s/apk/%s\n' "$base_url" "$app_file"
     fi
     printf '网站目录是：        %s\n' "$SITE_DIR"
     printf '源码目录是：        %s\n' "$SRC_DIR"

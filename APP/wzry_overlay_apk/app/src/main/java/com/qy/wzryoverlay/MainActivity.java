@@ -22,6 +22,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.ArrayAdapter;
+import android.widget.AdapterView;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageView;
@@ -40,7 +41,9 @@ import java.util.Collections;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -69,6 +72,8 @@ public class MainActivity extends Activity {
     private static final int REQUEST_MEDIA_PROJECTION = 5001;
     private static final String CURRENT_VERSION_NAME = "v6.1.11";
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
+    private static final int DEFAULT_FPS = 90;
+    private static final int[] FPS_VALUES = new int[]{60, 90, 120, 144};
 
     private final OkHttpClient http = new OkHttpClient();
     private final List<GameServer> servers = new ArrayList<>();
@@ -85,13 +90,11 @@ public class MainActivity extends Activity {
     private EditText activateCardInput;
     private EditText securityInput;
     private EditText apiBaseInput;
-    private EditText manualServerInput;
-    private EditText manualPortInput;
-    private EditText manualRoomInput;
     private Spinner fpsSpinner;
     private Button minionFixButton;
     private Button roomSelectButton;
     private Button roomArrowButton;
+    private Button connectRoomButton;
     private ScrollView roomListScroll;
     private LinearLayout roomListContent;
     private TextView roomCountBadge;
@@ -117,10 +120,18 @@ public class MainActivity extends Activity {
     private boolean appLoginDialogShown;
     private boolean loggedIn;
     private boolean secureMode;
+    private boolean pendingOverlayStart;
     private boolean updateBlocked;
     private boolean booting;
     private boolean loadingRooms;
     private String activeApiBase = DEFAULT_API_BASE;
+    private String bundledApiBase = "";
+    private String bundledServerHost = "";
+    private int bundledServerPort = DEFAULT_SERVER_PORT;
+    private String bundledLoginMode = "auto";
+    private String bundledAppName = "ALin雷达";
+    private String bundledBuyUrl = "";
+    private boolean fixedBundledServer;
     private int minionLaneRotationSteps;
     private float heroIconScale = 1f;
     private final Handler heartbeatHandler = new Handler(Looper.getMainLooper());
@@ -140,7 +151,13 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("alin_radar", MODE_PRIVATE);
-        activeApiBase = normalizeApiBase(prefs.getString("api_base", DEFAULT_API_BASE));
+        loadBundledAppConfig();
+        activeApiBase = fixedBundledServer && bundledApiBase.length() > 0
+                ? bundledApiBase
+                : normalizeApiBase(prefs.getString("api_base", bundledApiBase.length() > 0 ? bundledApiBase : DEFAULT_API_BASE));
+        if (fixedBundledServer && bundledApiBase.length() > 0) {
+            prefs.edit().putString("api_base", bundledApiBase).apply();
+        }
         loggedIn = prefs.getBoolean("logged_in", false);
         appOnlyLogin = prefs.getBoolean("app_only_login", false);
         secureMode = prefs.getBoolean("secure_mode", false);
@@ -156,19 +173,26 @@ public class MainActivity extends Activity {
         accountCardCode = prefs.getString("card_code", "");
         accountExpiresAt = prefs.getString("expires_at", "");
         accountCardStatus = prefs.getString("card_status", "");
+        selectedRoomLabel = prefs.getString("selected_room", "");
+        buyUrl = bundledBuyUrl;
         applyThemeColors();
         applySecureMode();
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 10);
-        loadAppLinks();
+        if (!isFrontendOnlyMode()) loadAppLinks();
         booting = true;
         showStartupPage();
-        checkRemoteConfig(false, false);
+        if (isFrontendOnlyMode()) enterWithoutLogin("纯前端模式，已免登录进入主页");
+        else checkRemoteConfig(false, false);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        checkRemoteConfig(false, false);
+        if (!isFrontendOnlyMode()) checkRemoteConfig(false, false);
+        if (pendingOverlayStart && (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this))) {
+            pendingOverlayStart = false;
+            startOverlay();
+        }
     }
 
     @Override
@@ -179,7 +203,7 @@ public class MainActivity extends Activity {
     }
 
     private void showStartupPage() {
-        LinearLayout root = createRoot("ALin雷达", "正在检测版本和公告");
+        LinearLayout root = createRoot(appTitle(), "正在检测版本和公告");
         statusText = status(root);
         setStatus("正在连接后台...");
     }
@@ -187,19 +211,21 @@ public class MainActivity extends Activity {
     private void showLoginPage() {
         closeRoomSocket();
         stopOnlineHeartbeat();
-        LinearLayout root = createRoot("ALin雷达", "账号登录");
+        LinearLayout root = createRoot(appTitle(), "账号登录");
         addThemeMenu(root);
 
-        LinearLayout apiCard = section(root);
-        TextView apiTitle = label("后台地址");
-        apiTitle.setTextSize(16);
-        apiTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        apiCard.addView(apiTitle, new LinearLayout.LayoutParams(-1, -2));
-        apiBaseInput = makeInput("http://域名或服务器IP");
-        apiBaseInput.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
-        apiBaseInput.setText(activeApiBase);
-        apiCard.addView(apiBaseInput, lpTop(48, 12));
-        apiCard.addView(makeSmallButton("保存并重连后台", this::saveApiBaseAndReconnect), lpTop(40, 10));
+        if (!(fixedBundledServer && bundledApiBase.length() > 0)) {
+            LinearLayout apiCard = section(root);
+            TextView apiTitle = label("后台地址");
+            apiTitle.setTextSize(16);
+            apiTitle.setTypeface(Typeface.DEFAULT_BOLD);
+            apiCard.addView(apiTitle, new LinearLayout.LayoutParams(-1, -2));
+            apiBaseInput = makeInput("http://域名或服务器IP");
+            apiBaseInput.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
+            apiBaseInput.setText(activeApiBase);
+            apiCard.addView(apiBaseInput, lpTop(48, 12));
+            apiCard.addView(makeSmallButton("保存并重连后台", this::saveApiBaseAndReconnect), lpTop(40, 10));
+        }
 
         LinearLayout tabRow = new LinearLayout(this);
         tabRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -295,7 +321,7 @@ public class MainActivity extends Activity {
         if (lastSeen >= CURRENT_VERSION_CODE) return;
         prefs.edit().putInt("last_seen_version", CURRENT_VERSION_CODE).apply();
         String notes = "v6.1.11 更新说明\n\n"
-            + "▶ 新增一键适配分辨率，自动调整小地图大小和位置\n"
+            + "▶ 新增一键适配，自动调整小地图大小和位置\n"
             + "▶ 新增截屏识别小地图功能（需授权截屏权限）\n"
             + "▶ 技能面板新增间距调节，缩放和间距分开控制\n"
             + "▶ 技能面板图标显示修复，缩放不再丢失图标\n"
@@ -315,27 +341,6 @@ public class MainActivity extends Activity {
         LinearLayout root = createPlainRoot("王者荣耀小地图");
         showUpdateNotes();
 
-        LinearLayout topRow = new LinearLayout(this);
-        topRow.setOrientation(LinearLayout.HORIZONTAL);
-        manualServerInput = makeInput("共享服务器地址");
-        manualServerInput.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
-        manualPortInput = makeInput("端口");
-        manualPortInput.setInputType(InputType.TYPE_CLASS_NUMBER);
-        manualPortInput.setText("8888");
-        manualPortInput.setFocusable(false);
-        manualPortInput.setFocusableInTouchMode(false);
-        manualPortInput.setCursorVisible(false);
-        manualPortInput.setKeyListener(null);
-        topRow.addView(manualServerInput, new LinearLayout.LayoutParams(0, dp(54), 2));
-        LinearLayout.LayoutParams portLp = new LinearLayout.LayoutParams(0, dp(54), 1);
-        portLp.leftMargin = dp(10);
-        topRow.addView(manualPortInput, portLp);
-        root.addView(topRow, lpTop(-2, 26));
-
-        Button connectServerButton = makeButton("连接服务器");
-        connectServerButton.setOnClickListener(v -> connectManualServerAndRefresh());
-        root.addView(connectServerButton, lpTop(46, 10));
-
         LinearLayout roomSelectRow = new LinearLayout(this);
         roomSelectRow.setOrientation(LinearLayout.HORIZONTAL);
         roomSelectButton = makeSmallButton(roomSelectLabel(), this::toggleRoomList);
@@ -354,7 +359,11 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams arrowLp = new LinearLayout.LayoutParams(dp(50), dp(54));
         arrowLp.leftMargin = dp(8);
         roomSelectRow.addView(roomArrowButton, arrowLp);
-        root.addView(roomSelectRow, lpTop(-2, 18));
+        Button refreshRoomsButton = makeSmallButton("刷新", this::refreshAllRooms);
+        LinearLayout.LayoutParams refreshLp = new LinearLayout.LayoutParams(dp(62), dp(54));
+        refreshLp.leftMargin = dp(8);
+        roomSelectRow.addView(refreshRoomsButton, refreshLp);
+        root.addView(roomSelectRow, lpTop(-2, 26));
 
         LinearLayout roomListRow = new LinearLayout(this);
         roomListRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -371,55 +380,38 @@ public class MainActivity extends Activity {
         roomListRow.addView(roomListScroll, new LinearLayout.LayoutParams(0, -2, 1));
         root.addView(roomListRow, lpTop(-2, 6));
 
-        Button refreshRoomButton = makeButton("刷新房间");
-        refreshRoomButton.setOnClickListener(v -> refreshAllRooms());
-        root.addView(refreshRoomButton, lpTop(46, 10));
-
-        manualRoomInput = makeInput("房间ID（可手动输入）");
-        manualRoomInput.setInputType(InputType.TYPE_CLASS_TEXT);
-        root.addView(manualRoomInput, lpTop(54, 12));
-
-        Button connectRoomButton = makeButton("连接");
-        connectRoomButton.setOnClickListener(v -> startOverlay());
-        root.addView(connectRoomButton, lpTop(46, 10));
-
         fpsSpinner = new Spinner(this);
         ArrayAdapter<String> fpsAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"60 FPS", "90 FPS", "120 FPS", "144 FPS"});
         fpsAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         fpsSpinner.setAdapter(fpsAdapter);
-        fpsSpinner.setSelection(1);
+        fpsSpinner.setSelection(fpsIndexFor(prefs.getInt("radar_fps", DEFAULT_FPS)));
+        fpsSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                saveSelectedFps(fpsFromIndex(position));
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
         root.addView(fpsSpinner, lpTop(54, 12));
+
+        connectRoomButton = makeButton(connectRoomButtonText());
+        connectRoomButton.setOnClickListener(v -> startOverlay());
+        root.addView(connectRoomButton, lpTop(48, 12));
+        updateConnectRoomButton();
 
         minionFixButton = makeButton(minionFixText());
         minionFixButton.setOnClickListener(v -> cycleMinionLaneFix());
         applyMinionFixButtonStyle();
         root.addView(minionFixButton, lpTop(48, 12));
 
-        LinearLayout adjustPanel = section(root);
-        adjustPanel.setOrientation(LinearLayout.VERTICAL);
-        adjustPanel.setVisibility(View.GONE);
-        TextView adjustTitle = label("绘制调节");
-        adjustTitle.setTextSize(16);
-        adjustTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        adjustPanel.addView(adjustTitle, new LinearLayout.LayoutParams(-1, -2));
-        addOverlayBoundsSliders(adjustPanel);
-        addSliderGroup(adjustPanel, "英雄", "hero");
-        addHeroScaleSlider(adjustPanel);
-        addSliderGroup(adjustPanel, "兵线", "minion");
-        addSliderGroup(adjustPanel, "野怪", "monster");
-
-        root.addView(switchRow("显示悬浮窗", "开启后自动连接服务器并显示悬浮窗", false, on -> {
-            if (on) startOverlay(); else stopService(new Intent(this, NativeOverlayService.class));
-        }), lpTop(-2, 24));
-        root.addView(switchRow("调整位置", "开启后显示小地图绘制调节滑杆", false, on -> {
-            adjustPanel.setVisibility(on ? View.VISIBLE : View.GONE);
-            setOverlayAdjustMode(on);
-        }), lpTop(-2, 20));
         root.addView(switchRow("显示技能状态", "开启后在小地图右侧显示英雄大招和技能状态", prefs.getBoolean("show_skill_panel", true), on -> {
             prefs.edit().putBoolean("show_skill_panel", on).apply();
             setOverlaySkillPanel(on);
             setStatus(on ? "技能状态已显示" : "技能状态已隐藏");
-        }), lpTop(-2, 20));
+        }), lpTop(-2, 24));
         root.addView(switchRow("防截图", "开启后悬浮窗内容不会被截图捕获", secureMode, on -> {
             secureMode = on;
             prefs.edit().putBoolean("secure_mode", secureMode).apply();
@@ -427,14 +419,15 @@ public class MainActivity extends Activity {
             setStatus(secureMode ? "防截图已开启" : "防截图已关闭");
         }), lpTop(-2, 20));
 
-        Button capturePermBtn = makeButton(NativeOverlayService.sProjectionData != null ? "截屏权限已授权 ✓" : "授权截屏(一键识别地图)");
+        Button capturePermBtn = makeButton(NativeOverlayService.sProjectionData != null ? "截屏权限已授权 ✓" : "授权截屏(一键适配)");
         capturePermBtn.setOnClickListener(v -> requestScreenCapture());
         root.addView(capturePermBtn, lpTop(46, 10));
 
         statusText = status(root);
-        setStatus("正在读取后台房间...");
+        setStatus("正在读取房间...");
         startOnlineHeartbeat();
-        loadPublicServers();
+        if (fixedBundledServer) loadBundledServerOnly();
+        else loadPublicServers();
     }
 
     private void addThemeMenu(LinearLayout root) {
@@ -443,29 +436,72 @@ public class MainActivity extends Activity {
     }
 
     private void showThemeDialog() {
-        String[] names = new String[]{"亮色", "深色", "蓝白", "墨绿"};
-        new AlertDialog.Builder(this)
-                .setTitle("选择主题")
-                .setSingleChoiceItems(names, themeIndex, (dialog, which) -> {
-                    themeIndex = which;
-                    prefs.edit().putInt("theme", themeIndex).apply();
-                    applyThemeColors();
-                    dialog.dismiss();
-                    if (loggedIn) showRadarPage(); else showLoginPage();
-                })
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(14), dp(8), dp(14), dp(8));
+        scroll.addView(content, new ScrollView.LayoutParams(-1, -2));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("主题")
+                .setView(scroll)
                 .setNegativeButton("取消", null)
-                .show();
+                .create();
+
+        addThemeOption(content, dialog, 0, "亮色", 0xfff8fafc, 0xffdbeafe, 0xff2563eb, 0xff0f172a);
+        addThemeOption(content, dialog, 1, "深色", 0xff111827, 0xff1e293b, 0xff60a5fa, 0xffffffff);
+        addThemeOption(content, dialog, 2, "蓝白", 0xffe0f2fe, 0xffeff6ff, 0xff7c3aed, 0xff0f172a);
+        addThemeOption(content, dialog, 3, "墨绿", 0xff052e2b, 0xff064e3b, 0xff34d399, 0xffffffff);
+        dialog.show();
     }
 
-    private Button themeButton(String text, int index) {
-        Button button = makeSmallButton(text, () -> {
-            themeIndex = index;
-            prefs.edit().putInt("theme", themeIndex).apply();
-            applyThemeColors();
-            if (loggedIn) showRadarPage(); else showLoginPage();
+    private void addThemeOption(LinearLayout parent, AlertDialog dialog, int index, String name,
+                                int startColor, int endColor, int accentColor, int textColor) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(8), dp(12), dp(8));
+        row.setBackground(makeStrokeBox(startColor,
+                index == themeIndex ? accentColor : borderColor, dp(12)));
+        row.setOnClickListener(v -> {
+            applyTheme(index);
+            dialog.dismiss();
         });
-        if (index == themeIndex) button.setText("* " + text);
-        return button;
+
+        LinearLayout swatches = new LinearLayout(this);
+        swatches.setOrientation(LinearLayout.HORIZONTAL);
+        swatches.addView(themeSwatch(startColor), new LinearLayout.LayoutParams(dp(24), dp(24)));
+        LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(dp(24), dp(24));
+        gap.leftMargin = dp(5);
+        swatches.addView(themeSwatch(endColor), gap);
+        LinearLayout.LayoutParams accentGap = new LinearLayout.LayoutParams(dp(24), dp(24));
+        accentGap.leftMargin = dp(5);
+        swatches.addView(themeSwatch(accentColor), accentGap);
+        row.addView(swatches, new LinearLayout.LayoutParams(dp(86), dp(32)));
+
+        TextView label = new TextView(this);
+        label.setText(index == themeIndex ? name + "  当前" : name);
+        label.setTextColor(textColor);
+        label.setTextSize(15);
+        label.setTypeface(index == themeIndex ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+        row.addView(label, new LinearLayout.LayoutParams(0, dp(36), 1));
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(54));
+        lp.bottomMargin = dp(8);
+        parent.addView(row, lp);
+    }
+
+    private View themeSwatch(int color) {
+        View view = new View(this);
+        view.setBackground(makeStrokeBox(color, 0x66ffffff, dp(999)));
+        return view;
+    }
+
+    private void applyTheme(int index) {
+        themeIndex = index;
+        prefs.edit().putInt("theme", themeIndex).apply();
+        applyThemeColors();
+        if (loggedIn) showRadarPage(); else showLoginPage();
     }
 
     private void addSliderGroup(LinearLayout parent, String title, String target) {
@@ -606,6 +642,33 @@ public class MainActivity extends Activity {
         startService(intent);
     }
 
+    private void loadBundledAppConfig() {
+        try (InputStream in = getAssets().open("radar-app-config.json")) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[1024];
+            int len;
+            while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
+            JSONObject json = new JSONObject(new String(out.toByteArray(), StandardCharsets.UTF_8));
+            bundledApiBase = normalizeApiBase(json.optString("apiBase", ""));
+            bundledServerHost = normalizeServerHost(json.optString("serverHost", ""));
+            bundledServerPort = normalizeServerPort(json.optString("serverPort", ""), DEFAULT_SERVER_PORT);
+            bundledLoginMode = json.optString("loginMode", "auto").trim().toLowerCase();
+            bundledAppName = json.optString("appName", bundledAppName).trim();
+            bundledBuyUrl = json.optString("buyUrl", "").trim();
+            if (bundledAppName.length() == 0) bundledAppName = "ALin雷达";
+            if (!"backend".equals(bundledLoginMode) && !"frontend".equals(bundledLoginMode)) bundledLoginMode = "auto";
+            fixedBundledServer = json.optBoolean("fixed", false) && bundledApiBase.length() > 0;
+        } catch (Exception ignored) {
+            bundledApiBase = "";
+            bundledServerHost = "";
+            bundledServerPort = DEFAULT_SERVER_PORT;
+            bundledLoginMode = "auto";
+            bundledAppName = "ALin雷达";
+            bundledBuyUrl = "";
+            fixedBundledServer = false;
+        }
+    }
+
     private String apiUrl(String path) {
         return activeApiBase + path;
     }
@@ -624,13 +687,62 @@ public class MainActivity extends Activity {
         return raw;
     }
 
+    private String normalizeServerHost(String value) {
+        String raw = value == null ? "" : value.trim();
+        raw = raw.replaceFirst("(?i)^https?://", "");
+        raw = raw.replaceFirst("(?i)^wss?://", "");
+        int slash = raw.indexOf('/');
+        if (slash >= 0) raw = raw.substring(0, slash);
+        int colon = raw.indexOf(':');
+        if (colon >= 0) raw = raw.substring(0, colon);
+        return raw.trim();
+    }
+
     private boolean isConfiguredApiBase(String value) {
         if (value == null || value.trim().length() == 0 || value.contains("你的域名")) return false;
         Uri uri = Uri.parse(normalizeApiBase(value));
         return uri.getScheme() != null && uri.getHost() != null && uri.getHost().trim().length() > 0;
     }
 
+    private boolean shouldAutoEnterWithoutBackend() {
+        return fixedBundledServer && ("auto".equals(bundledLoginMode) || "frontend".equals(bundledLoginMode));
+    }
+
+    private boolean isFrontendOnlyMode() {
+        return fixedBundledServer && "frontend".equals(bundledLoginMode);
+    }
+
+    private int normalizeServerPort(String value, int fallback) {
+        try {
+            int port = Integer.parseInt(value == null ? "" : value.trim());
+            return port > 0 && port <= 65535 ? port : fallback;
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    private String preferNonEmpty(String remoteValue, String currentValue) {
+        String next = remoteValue == null ? "" : remoteValue.trim();
+        if (next.length() > 0) return next;
+        return currentValue == null ? "" : currentValue;
+    }
+
+    private String appTitle() {
+        return bundledAppName == null || bundledAppName.trim().length() == 0 ? "ALin雷达" : bundledAppName.trim();
+    }
+
+    private int brandIconResId() {
+        int customIcon = getResources().getIdentifier("ic_launcher", "mipmap", getPackageName());
+        if (customIcon != 0) return customIcon;
+        return getResources().getIdentifier("ic_radar", "drawable", getPackageName());
+    }
+
     private boolean applyApiBaseFromInput() {
+        if (fixedBundledServer && bundledApiBase.length() > 0) {
+            activeApiBase = bundledApiBase;
+            prefs.edit().putString("api_base", bundledApiBase).apply();
+            return true;
+        }
         if (apiBaseInput == null) return true;
         String next = normalizeApiBase(apiBaseInput.getText().toString());
         if (!isConfiguredApiBase(next)) {
@@ -660,6 +772,10 @@ public class MainActivity extends Activity {
     }
 
     private void loadPublicServers() {
+        if (fixedBundledServer) {
+            loadBundledServerOnly();
+            return;
+        }
         if (!isConfiguredApiBase(activeApiBase)) {
             setStatus("请先填写后台地址");
             return;
@@ -671,7 +787,7 @@ public class MainActivity extends Activity {
             public void onFailure(Call call, java.io.IOException e) {
                 runOnUiThread(() -> {
                     servers.clear();
-                    servers.add(new GameServer("默认服务器", DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT));
+                    servers.add(new GameServer("默认服务器", defaultServerHost(), defaultServerPort()));
                     refreshAllRooms();
                 });
             }
@@ -692,14 +808,17 @@ public class MainActivity extends Activity {
                             if (host.length() > 0) next.add(new GameServer(name.length() > 0 ? name : ("服务器" + (i + 1)), host, port));
                         }
                     }
-                    if (next.isEmpty()) next.add(new GameServer("默认服务器", DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT));
+                    if (next.isEmpty()) next.add(new GameServer("默认服务器", defaultServerHost(), defaultServerPort()));
                     runOnUiThread(() -> {
                         servers.clear();
                         servers.addAll(next);
                         refreshAllRooms();
                     });
                 } catch (Exception e) {
-                    runOnUiThread(() -> setStatus("服务器列表解析失败"));
+                    runOnUiThread(() -> {
+                        loadBundledServerOnly();
+                        setStatus("后台服务器列表解析失败，已使用内置 WebSocket");
+                    });
                 } finally {
                     response.close();
                 }
@@ -707,50 +826,12 @@ public class MainActivity extends Activity {
         });
     }
 
-    private boolean isManualServerEmpty() {
-        return manualServerInput == null || manualServerInput.getText().toString().trim().length() == 0;
-    }
-
     private int pendingRoomServerCount = 0;
 
-    private void connectManualServerAndRefresh() {
-        String manual = manualServerInput == null ? "" : manualServerInput.getText().toString().trim();
-        if (manual.length() == 0) {
-            setStatus("未填写IP，正在读取后台筛选IP");
-            loadPublicServers();
-            return;
-        }
-        closeRoomSocket();
-        String port = manualPortInput == null ? "" : manualPortInput.getText().toString().trim();
-        if (port.length() == 0) port = "8888";
-        String address = manual.contains(":") ? manual : manual + ":" + port;
-        String hostPort = normalizeHostPort(address);
-        String host = hostPort;
-        int parsedPort = 8888;
-        int colon = hostPort.lastIndexOf(':');
-        if (colon > 0) {
-            host = hostPort.substring(0, colon);
-            try { parsedPort = Integer.parseInt(hostPort.substring(colon + 1)); } catch (Exception ignored) { parsedPort = 8888; }
-        }
-        GameServer manualServer = new GameServer("手动服务器", host, parsedPort);
-        boolean exists = false;
-        for (GameServer server : servers) {
-            if (server.address().equals(manualServer.address())) {
-                exists = true;
-                break;
-            }
-        }
-        if (!exists) servers.add(0, manualServer);
-        rooms.clear();
-        roomServerAddresses.clear();
-        loadingRooms = true;
-        if (roomSelectButton != null) roomSelectButton.setText("正在获取房间号");
-        renderRooms(new ArrayList<>());
-        pendingRoomServerCount = 1;
-        int token = ++roomRefreshToken;
-        setStatus("正在连接服务器: " + manualServer.address());
-        connectRoomListOnce(manualServer, token);
-        reportManualServerIfNeeded(manualServer.address());
+    private void loadBundledServerOnly() {
+        servers.clear();
+        servers.add(new GameServer("默认服务器", defaultServerHost(), defaultServerPort()));
+        refreshAllRooms();
     }
 
     private void refreshAllRooms() {
@@ -765,7 +846,8 @@ public class MainActivity extends Activity {
         }
         renderRooms(new ArrayList<>());
         if (servers.isEmpty()) {
-            setStatus("暂无服务器，请先连接");
+            setStatus("暂无服务器，正在读取后台服务器");
+            loadPublicServers();
             return;
         }
         pendingRoomServerCount = servers.size();
@@ -856,13 +938,17 @@ public class MainActivity extends Activity {
         rooms.clear();
         rooms.addAll(nextRooms);
         Collections.sort(rooms);
-        if (selectedRoomLabel.length() > 0 && !rooms.contains(selectedRoomLabel)) selectedRoomLabel = "";
+        if (!loadingRooms && selectedRoomLabel.length() > 0 && !rooms.contains(selectedRoomLabel)) {
+            selectedRoomLabel = "";
+            prefs.edit().remove("selected_room").apply();
+        }
         ArrayList<String> labels = new ArrayList<>();
         if (rooms.isEmpty()) labels.add(loadingRooms ? "正在获取房间号" : "暂无房间号");
         else labels.addAll(rooms);
         renderRoomList(labels);
         if (roomSelectButton != null) roomSelectButton.setText(roomSelectLabel());
         if (roomCountBadge != null) roomCountBadge.setText(rooms.size() + "间");
+        updateConnectRoomButton();
     }
 
     private void renderRoomList(List<String> labels) {
@@ -901,8 +987,9 @@ public class MainActivity extends Activity {
         String clean = cleanRoomLabel(labelText);
         if (rooms.contains(clean)) {
             selectedRoomLabel = clean;
-            if (manualRoomInput != null) manualRoomInput.setText("");
+            prefs.edit().putString("selected_room", selectedRoomLabel).apply();
             if (roomSelectButton != null) roomSelectButton.setText(roomSelectLabel());
+            updateConnectRoomButton();
         }
         if (roomListScroll != null) roomListScroll.setVisibility(View.GONE);
         if (roomArrowButton != null) roomArrowButton.setText("v");
@@ -928,8 +1015,6 @@ public class MainActivity extends Activity {
     }
 
     private String selectedRoom() {
-        String manual = manualRoomInput == null ? "" : manualRoomInput.getText().toString().trim();
-        if (manual.length() > 0) return manual;
         return selectedRoomLabel == null ? "" : selectedRoomLabel;
     }
 
@@ -938,25 +1023,19 @@ public class MainActivity extends Activity {
     }
 
     private String selectedRoomServerAddress() {
-        String manual = manualServerInput == null ? "" : manualServerInput.getText().toString().trim();
-        if (manual.length() > 0) {
-            if (!manual.contains(":")) {
-                String port = manualPortInput == null ? "" : manualPortInput.getText().toString().trim();
-                if (port.length() == 0) port = "8888";
-                manual = manual + ":" + port;
-            }
-            return manual;
-        }
-        String manualRoom = manualRoomInput == null ? "" : manualRoomInput.getText().toString().trim();
-        if (manualRoom.length() > 0) {
-            String mapped = roomServerAddresses.get(manualRoom);
-            if (mapped != null && mapped.length() > 0) return mapped;
-        }
         if (selectedRoomLabel != null && selectedRoomLabel.length() > 0) {
             String mapped = roomServerAddresses.get(selectedRoomLabel);
             if (mapped != null && mapped.length() > 0) return mapped;
         }
-        return servers.isEmpty() ? DEFAULT_SERVER_HOST + ":" + DEFAULT_SERVER_PORT : servers.get(0).address();
+        return servers.isEmpty() ? defaultServerHost() + ":" + defaultServerPort() : servers.get(0).address();
+    }
+
+    private String defaultServerHost() {
+        return bundledServerHost.length() > 0 ? bundledServerHost : DEFAULT_SERVER_HOST;
+    }
+
+    private int defaultServerPort() {
+        return bundledServerPort > 0 ? bundledServerPort : DEFAULT_SERVER_PORT;
     }
 
     private String buildWsUrl(String value) {
@@ -1136,7 +1215,7 @@ public class MainActivity extends Activity {
         if (requestCode == REQUEST_MEDIA_PROJECTION && resultCode == RESULT_OK && data != null) {
             NativeOverlayService.sProjectionResultCode = resultCode;
             NativeOverlayService.sProjectionData = data;
-            setStatus("截屏权限已授权，可使用一键识别地图");
+            setStatus("截屏权限已授权，可使用一键适配");
         } else if (requestCode == REQUEST_MEDIA_PROJECTION) {
             setStatus("截屏权限被拒绝");
         }
@@ -1152,29 +1231,40 @@ public class MainActivity extends Activity {
             return;
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            pendingOverlayStart = true;
+            setStatus("请先授权悬浮窗，授权返回后会自动连接房间");
             requestOverlayPermission();
             return;
         }
         String server = selectedRoomServerAddress();
         String room = selectedRoom();
         if (server.length() == 0) {
-            setStatus("请选择或填写服务器");
+            setStatus("正在读取后台服务器，请稍后再试");
+            loadPublicServers();
             return;
         }
-        reportManualServerIfNeeded(server);
+        if (room.length() == 0) {
+            setStatus("请先从房间列表选择房间号");
+            return;
+        }
         Intent intent = new Intent(this, NativeOverlayService.class);
         intent.putExtra("site", server);
         intent.putExtra("room", room);
-        intent.putExtra("fps", selectedFps());
+        int fps = selectedFps();
+        intent.putExtra("fps", fps);
         intent.putExtra("minion_fix_steps", minionLaneRotationSteps);
         intent.putStringArrayListExtra("rooms", new ArrayList<>(rooms));
         ArrayList<String> mappedServers = new ArrayList<>();
         for (String r : rooms) mappedServers.add(roomServerAddresses.get(r));
         intent.putStringArrayListExtra("room_servers", mappedServers);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent); else startService(intent);
-        prefs.edit().putBoolean("adjust_panel_visible", true).apply();
+        prefs.edit()
+                .putString("selected_room", room)
+                .putInt("radar_fps", fps)
+                .putBoolean("adjust_panel_visible", true)
+                .apply();
         setOverlayAdjustMode(true);
-        setStatus("已启动小地图悬浮窗");
+        setStatus("已连接房间 " + room + "，悬浮窗已弹出");
     }
 
     private void cycleMinionLaneFix() {
@@ -1218,40 +1308,36 @@ public class MainActivity extends Activity {
     }
 
     private int selectedFps() {
-        int pos = fpsSpinner == null ? 1 : fpsSpinner.getSelectedItemPosition();
-        if (pos == 0) return 60;
-        if (pos == 2) return 120;
-        if (pos == 3) return 144;
-        return 90;
+        return fpsSpinner == null ? prefs.getInt("radar_fps", DEFAULT_FPS) : fpsFromIndex(fpsSpinner.getSelectedItemPosition());
     }
 
-    private void reportManualServerIfNeeded(String serverValue) {
-        if (!isConfiguredApiBase(activeApiBase)) return;
-        String manual = manualServerInput == null ? "" : manualServerInput.getText().toString().trim();
-        if (manual.length() == 0) return;
-        String hostPort = normalizeHostPort(serverValue);
-        String host = hostPort;
-        int port = 8888;
-        int colon = hostPort.lastIndexOf(':');
-        if (colon > 0) {
-            host = hostPort.substring(0, colon);
-            try { port = Integer.parseInt(hostPort.substring(colon + 1)); } catch (Exception ignored) { port = 8888; }
+    private int fpsFromIndex(int index) {
+        return index >= 0 && index < FPS_VALUES.length ? FPS_VALUES[index] : DEFAULT_FPS;
+    }
+
+    private int fpsIndexFor(int fps) {
+        for (int i = 0; i < FPS_VALUES.length; i++) {
+            if (FPS_VALUES[i] == fps) return i;
         }
-        JSONObject body = new JSONObject();
-        try {
-            body.put("action", "app_report");
-            body.put("host", host);
-            body.put("port", port);
-            body.put("username", prefs.getString("username", username()));
-        } catch (Exception ignored) {}
-        Request request = new Request.Builder()
-                .url(apiUrl("/api/index.php?module=game_servers"))
-                .post(RequestBody.create(body.toString(), JSON))
-                .build();
-        http.newCall(request).enqueue(new Callback() {
-            @Override public void onFailure(Call call, java.io.IOException e) {}
-            @Override public void onResponse(Call call, Response response) { response.close(); }
-        });
+        return 1;
+    }
+
+    private void saveSelectedFps(int fps) {
+        prefs.edit().putInt("radar_fps", fps).apply();
+    }
+
+    private String connectRoomButtonText() {
+        String room = selectedRoom();
+        if (room.length() > 0) return "连接房间 " + room;
+        return loadingRooms ? "正在获取房间" : "请选择房间";
+    }
+
+    private void updateConnectRoomButton() {
+        if (connectRoomButton == null) return;
+        boolean ready = selectedRoom().length() > 0;
+        connectRoomButton.setText(connectRoomButtonText());
+        connectRoomButton.setEnabled(ready);
+        connectRoomButton.setAlpha(ready ? 1f : 0.52f);
     }
 
     private String normalizeHostPort(String value) {
@@ -1259,7 +1345,7 @@ public class MainActivity extends Activity {
         host = host.replace("https://", "").replace("http://", "").replace("ws://", "").replace("wss://", "");
         int slash = host.indexOf('/');
         if (slash >= 0) host = host.substring(0, slash);
-        if (!host.contains(":")) host += ":8888";
+        if (!host.contains(":")) host += ":" + defaultServerPort();
         return host;
     }
 
@@ -1274,6 +1360,7 @@ public class MainActivity extends Activity {
 
     private void startOnlineHeartbeat() {
         stopOnlineHeartbeat();
+        if (isFrontendOnlyMode()) return;
         heartbeatRunnable = new Runnable() {
             @Override
             public void run() {
@@ -1292,6 +1379,7 @@ public class MainActivity extends Activity {
     }
 
     private void sendOnlineHeartbeat() {
+        if (isFrontendOnlyMode()) return;
         if (!isConfiguredApiBase(activeApiBase)) return;
         JSONObject body = new JSONObject();
         try {
@@ -1310,6 +1398,7 @@ public class MainActivity extends Activity {
     }
 
     private void loadAppLinks() {
+        if (isFrontendOnlyMode()) return;
         if (!isConfiguredApiBase(activeApiBase)) return;
         Request request = new Request.Builder().url(apiUrl("/api/index.php?module=app_settings&action=public")).get().build();
         http.newCall(request).enqueue(new Callback() {
@@ -1320,10 +1409,10 @@ public class MainActivity extends Activity {
                     JSONObject json = new JSONObject(response.body() == null ? "" : response.body().string());
                     JSONObject data = json.optJSONObject("data");
                     if (data != null) {
-                        trialUrl = data.optString("trial_url", "");
-                        buyUrl = data.optString("buy_card_url", "");
-                        downloadUrl = data.optString("download_url", "");
-                        groupUrl = data.optString("group_url", downloadUrl);
+                        trialUrl = preferNonEmpty(data.optString("trial_url", ""), trialUrl);
+                        buyUrl = preferNonEmpty(data.optString("buy_card_url", ""), buyUrl);
+                        downloadUrl = preferNonEmpty(data.optString("download_url", ""), downloadUrl);
+                        groupUrl = preferNonEmpty(data.optString("group_url", ""), groupUrl.length() > 0 ? groupUrl : downloadUrl);
                     }
                 } catch (Exception ignored) {
                 } finally {
@@ -1337,7 +1426,8 @@ public class MainActivity extends Activity {
         if (!isConfiguredApiBase(activeApiBase)) {
             if (booting) {
                 booting = false;
-                showLoginPage();
+                if (shouldAutoEnterWithoutBackend()) enterWithoutLogin("未配置后台，已免登录进入主页");
+                else showLoginPage();
             }
             setStatus("请先填写后台地址");
             return;
@@ -1350,7 +1440,8 @@ public class MainActivity extends Activity {
                     if (manual) setStatus("远程配置请求失败");
                     if (booting) {
                         booting = false;
-                        enterWithoutLogin("后台未连接，已默认免登录进入");
+                        if (shouldAutoEnterWithoutBackend()) enterWithoutLogin("未检测到后台，已免登录进入主页");
+                        else showLoginPage();
                     }
                 });
             }
@@ -1360,14 +1451,27 @@ public class MainActivity extends Activity {
                 try {
                     JSONObject json = new JSONObject(response.body() == null ? "" : response.body().string());
                     JSONObject data = json.optJSONObject("data");
-                    if (data == null) return;
+                    if (data == null) {
+                        runOnUiThread(() -> {
+                            if (manual) setStatus("后台已连接，需要登录");
+                            if (booting) {
+                                booting = false;
+                                if (loggedIn) showRadarPage();
+                                else {
+                                    showLoginPage();
+                                    showAppLoginDialogIfNeeded();
+                                }
+                            }
+                        });
+                        return;
+                    }
                     JSONObject links = data.optJSONObject("links");
                     appLoginRequired = data.optBoolean("login_required", true);
                     if (links != null) {
-                        trialUrl = links.optString("trial_url", trialUrl);
-                        buyUrl = links.optString("buy_card_url", buyUrl);
-                        downloadUrl = links.optString("download_url", downloadUrl);
-                        groupUrl = links.optString("group_url", groupUrl.length() > 0 ? groupUrl : downloadUrl);
+                        trialUrl = preferNonEmpty(links.optString("trial_url", ""), trialUrl);
+                        buyUrl = preferNonEmpty(links.optString("buy_card_url", ""), buyUrl);
+                        downloadUrl = preferNonEmpty(links.optString("download_url", ""), downloadUrl);
+                        groupUrl = preferNonEmpty(links.optString("group_url", ""), groupUrl.length() > 0 ? groupUrl : downloadUrl);
                     }
                     JSONObject appLogin = data.optJSONObject("app_login");
                     if (appLogin != null) {
@@ -1383,7 +1487,8 @@ public class MainActivity extends Activity {
                         if (manual) setStatus("远程配置解析失败");
                         if (booting) {
                             booting = false;
-                            enterWithoutLogin("后台配置异常，已默认免登录进入");
+                            if (shouldAutoEnterWithoutBackend()) enterWithoutLogin("未检测到有效后台，已免登录进入主页");
+                            else showLoginPage();
                         }
                     });
                 } finally {
@@ -1448,7 +1553,7 @@ public class MainActivity extends Activity {
 
     private void showUpdateBlockedPage(JSONObject update, JSONObject popup) {
         stopOnlineHeartbeat();
-        LinearLayout root = createRoot("ALin雷达", "当前版本需要更新");
+        LinearLayout root = createRoot(appTitle(), "当前版本需要更新");
         LinearLayout card = section(root);
         String title = update == null ? "发现版本变更" : update.optString("title", "发现版本变更");
         String message = update == null ? "当前版本与后台版本号不一致，请更新后使用。" : update.optString("message", "当前版本与后台版本号不一致，请更新后使用。");
@@ -1531,7 +1636,7 @@ public class MainActivity extends Activity {
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
 
         ImageView brand = new ImageView(this);
-        brand.setImageResource(getResources().getIdentifier("ic_radar", "drawable", getPackageName()));
+        brand.setImageResource(brandIconResId());
         brand.setAdjustViewBounds(true);
         root.addView(brand, new LinearLayout.LayoutParams(dp(86), dp(86)));
 
@@ -1879,6 +1984,7 @@ public class MainActivity extends Activity {
         if (url == null) return "";
         String raw = url.trim();
         if (raw.length() == 0) return "";
+        if (looksLikeExternalHost(raw)) return "https://" + raw;
         if (raw.matches("(?i)^[a-z][a-z0-9+.-]*:.*")) return raw;
         Uri base = Uri.parse(activeApiBase);
         String scheme = base.getScheme();
@@ -1886,6 +1992,47 @@ public class MainActivity extends Activity {
         if (scheme == null || host == null) return raw;
         String origin = scheme + "://" + host + (base.getPort() >= 0 ? ":" + base.getPort() : "");
         return origin + (raw.startsWith("/") ? raw : "/" + raw);
+    }
+
+    private boolean looksLikeExternalHost(String raw) {
+        if (raw.startsWith("/") || raw.startsWith("#") || raw.startsWith("./") || raw.startsWith("../")) return false;
+        String hostPart = raw.split("[/?#]", 2)[0];
+        if (hostPart.matches("(?i)^localhost(:\\d+)?$")) return true;
+        if (hostPart.matches("^\\d{1,3}(\\.\\d{1,3}){3}(:\\d+)?$")) return true;
+        int dot = hostPart.lastIndexOf('.');
+        if (dot <= 0 || dot >= hostPart.length() - 1) return false;
+        String suffix = hostPart.substring(dot + 1).toLowerCase().replaceFirst(":\\d+$", "");
+        return !isRelativeFileExtension(suffix);
+    }
+
+    private boolean isRelativeFileExtension(String suffix) {
+        switch (suffix) {
+            case "html":
+            case "htm":
+            case "php":
+            case "asp":
+            case "aspx":
+            case "jsp":
+            case "json":
+            case "xml":
+            case "txt":
+            case "apk":
+            case "zip":
+            case "rar":
+            case "7z":
+            case "js":
+            case "css":
+            case "png":
+            case "jpg":
+            case "jpeg":
+            case "gif":
+            case "webp":
+            case "svg":
+            case "ico":
+                return true;
+            default:
+                return false;
+        }
     }
 
     private void openUrl(String url) {

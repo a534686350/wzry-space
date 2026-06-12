@@ -8,9 +8,16 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorFilter;
+import android.graphics.LinearGradient;
+import android.graphics.Paint;
 import android.graphics.PixelFormat;
+import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
@@ -45,6 +52,9 @@ import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
 public class NativeOverlayService extends Service {
+    private static final int MIN_POLL_DELAY_MS = 33;
+    private static final int MIN_UI_FRAME_MS = 33;
+
     public static final String ACTION_ADJUST = "com.qy.wzryoverlay.ADJUST";
     public static final String ACTION_SET_OFFSET = "com.qy.wzryoverlay.SET_OFFSET";
     public static final String ACTION_ZOOM = "com.qy.wzryoverlay.ZOOM";
@@ -76,6 +86,7 @@ public class NativeOverlayService extends Service {
     private Button toggleButton;
     private SharedPreferences prefs;
     private WebSocket webSocket;
+    private final Object radarDataLock = new Object();
     private String server = "";
     private String roomId = "";
     private final ArrayList<String> roomNames = new ArrayList<>();
@@ -107,12 +118,16 @@ public class NativeOverlayService extends Service {
     private boolean showHeroes = true;
     private boolean showMinions = true;
     private boolean showMonsters = true;
-    private boolean showZeroSkillCd = true;
+    private boolean showZeroSkillCd = false;
+    private float panelAlpha = 0.88f;
     private int minionLaneRotationSteps;
     private int overlaySizePx;
-    private int activeMainPage = 2;
+    private int activeMainPage = 1;
     private int activeDrawTab = 0;
     private Button panelRoomButton;
+    private RadarData pendingRadarData;
+    private boolean radarFramePosted;
+    private volatile long lastRadarFrameAt;
 
     private final Runnable pollTask = new Runnable() {
         @Override
@@ -146,7 +161,7 @@ public class NativeOverlayService extends Service {
             }
         }
         int fps = intent != null ? intent.getIntExtra("fps", 90) : 90;
-        frameDelayMs = Math.max(6, 1000 / Math.max(1, fps));
+        frameDelayMs = Math.max(MIN_POLL_DELAY_MS, 1000 / Math.max(1, fps));
         if (nextServer == null || nextServer.trim().length() == 0) nextServer = "127.0.0.1";
         if (nextRoom == null) nextRoom = "";
         boolean changed = !nextServer.equals(server) || !nextRoom.equals(roomId);
@@ -280,7 +295,7 @@ public class NativeOverlayService extends Service {
         adjustMode = prefs.getBoolean("overlay_adjust_mode", false);
         showSkillPanel = prefs.getBoolean("show_skill_panel", true);
         radarView = new RadarView(this);
-        radarView.setHeroIconCache(new HeroIconCache(client));
+        radarView.setHeroIconCache(new HeroIconCache(this, client));
         radarView.setRoomId(roomId);
         radarView.setStatus("");
         loadAdjustPrefs();
@@ -296,8 +311,9 @@ public class NativeOverlayService extends Service {
         overlaySizePx = savedSize;
         radarView.setOverlaySize(overlaySizePx);
         params = new WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, type,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                overlayWindowFlags(false),
                 PixelFormat.TRANSLUCENT);
+        applyCutoutMode(params);
         params.gravity = Gravity.TOP | Gravity.START;
         params.x = 0;
         params.y = 0;
@@ -347,9 +363,32 @@ public class NativeOverlayService extends Service {
         }
         if (payload == null || payload.trim().length() == 0) return;
         RadarData parsed = RadarParser.parse(payload);
-        handler.post(() -> {
-            if (radarView != null) radarView.setData(parsed);
-        });
+        scheduleRadarUpdate(parsed);
+    }
+
+    private void scheduleRadarUpdate(RadarData parsed) {
+        if (parsed == null) return;
+        synchronized (radarDataLock) {
+            pendingRadarData = parsed;
+            if (radarFramePosted) return;
+            radarFramePosted = true;
+        }
+        long now = System.currentTimeMillis();
+        long delay = Math.max(0, MIN_UI_FRAME_MS - (now - lastRadarFrameAt));
+        handler.postDelayed(this::flushRadarUpdate, delay);
+    }
+
+    private void flushRadarUpdate() {
+        RadarData latest;
+        synchronized (radarDataLock) {
+            latest = pendingRadarData;
+            pendingRadarData = null;
+            radarFramePosted = false;
+        }
+        if (latest != null && radarView != null) {
+            lastRadarFrameAt = System.currentTimeMillis();
+            radarView.setData(latest);
+        }
     }
 
     private void reconnectLater() {
@@ -371,6 +410,10 @@ public class NativeOverlayService extends Service {
 
     private void disconnect() {
         handler.removeCallbacks(pollTask);
+        synchronized (radarDataLock) {
+            pendingRadarData = null;
+            radarFramePosted = false;
+        }
         if (webSocket != null) {
             webSocket.close(1000, "stop");
             webSocket = null;
@@ -454,35 +497,50 @@ public class NativeOverlayService extends Service {
             captureScreenAndDetectMap();
             return;
         }
+        applyEstimatedFitResult(estimatedMiniMapSize());
+    }
+
+    private int estimatedMiniMapSize() {
         int sw = getResources().getDisplayMetrics().widthPixels;
         int sh = getResources().getDisplayMetrics().heightPixels;
         int longSide = Math.max(sw, sh);
         int shortSide = Math.min(sw, sh);
-        int mapSizePx;
         if (longSide >= 2400) {
-            mapSizePx = (int) (shortSide * 0.30f);
-        } else if (longSide >= 2160) {
-            mapSizePx = (int) (shortSide * 0.29f);
-        } else if (longSide >= 1920) {
-            mapSizePx = (int) (shortSide * 0.28f);
-        } else {
-            mapSizePx = (int) (shortSide * 0.27f);
+            return (int) (shortSide * 0.30f);
         }
-        applyAutoFitResult(mapSizePx);
+        if (longSide >= 2160) {
+            return (int) (shortSide * 0.29f);
+        }
+        if (longSide >= 1920) {
+            return (int) (shortSide * 0.28f);
+        }
+        return (int) (shortSide * 0.27f);
     }
 
-    private void applyAutoFitResult(int mapSizePx) {
+    private void applyEstimatedFitResult(int mapSizePx) {
         mapSizePx = clamp(mapSizePx, dp(MIN_OVERLAY_DP), dp(MAX_OVERLAY_DP));
+        int screenH = getResources().getDisplayMetrics().heightPixels;
+        if (prefs == null) prefs = getSharedPreferences("alin_radar", MODE_PRIVATE);
+        int left = prefs.contains("map_x") ? Math.round(prefs.getFloat("map_x", 0f)) : 0;
+        int top = prefs.contains("map_y") ? Math.round(prefs.getFloat("map_y", 0f) + ((screenH - mapSizePx) / 2f)) : 0;
+        applyAutoFitBounds(left, top, mapSizePx);
+    }
+
+    private void applyAutoFitBounds(int left, int top, int mapSizePx) {
         int screenW = getResources().getDisplayMetrics().widthPixels;
         int screenH = getResources().getDisplayMetrics().heightPixels;
-        int shortSide = Math.min(screenW, screenH);
-        mapX = 0f;
-        mapY = -((shortSide - mapSizePx) / 2f);
+        mapSizePx = clamp(mapSizePx, dp(MIN_OVERLAY_DP), dp(MAX_OVERLAY_DP));
+        left = clamp(left, 0, Math.max(0, screenW - mapSizePx));
+        top = clamp(top, 0, Math.max(0, screenH - mapSizePx));
+
+        mapX = left;
+        mapY = top - ((screenH - mapSizePx) / 2f);
         mapScale = 1f;
         heroX = heroY = 0f;
         minionX = minionY = 0f;
         monsterX = monsterY = 0f;
-        skillX = skillY = 0f;
+        skillX = left;
+        skillY = Math.max(0, top - dp(4));
         heroScale = 0.72f;
         minionScale = 1f;
         monsterScale = 1f;
@@ -560,17 +618,21 @@ public class NativeOverlayService extends Service {
                 display.release();
                 reader.close();
                 projection.stop();
-                int detected = detectMiniMapSize(pixels, imgW, imgH);
-                handler.post(() -> {
-                    restoreOverlayViews();
-                    if (detected > dp(40)) {
-                        applyAutoFitResult(detected);
-                        if (radarView != null) radarView.setStatus("识别成功 " + detected + "px");
-                    } else {
-                        autoFitResolution();
-                        if (radarView != null) radarView.setStatus("未检测到小地图,已按分辨率适配");
-                    }
-                });
+                new Thread(() -> {
+                    MiniMapBounds detected = detectMiniMapBounds(pixels, imgW, imgH);
+                    handler.post(() -> {
+                        restoreOverlayViews();
+                        if (detected != null && detected.size > dp(40)) {
+                            applyAutoFitBounds(detected.left, detected.top, detected.size);
+                            if (radarView != null) {
+                                radarView.setStatus("识别小地图 " + detected.left + "," + detected.top + " " + detected.size + "px");
+                            }
+                        } else {
+                            applyEstimatedFitResult(estimatedMiniMapSize());
+                            if (radarView != null) radarView.setStatus("未识别到小地图,已按屏幕估算");
+                        }
+                    });
+                }, "radar-map-detect").start();
             } catch (Exception e) {
                 if (image != null) image.close();
                 display.release();
@@ -578,79 +640,154 @@ public class NativeOverlayService extends Service {
                 projection.stop();
                 handler.post(() -> {
                     restoreOverlayViews();
-                    autoFitResolution();
+                    applyEstimatedFitResult(estimatedMiniMapSize());
+                    if (radarView != null) radarView.setStatus("截屏识别失败,已按屏幕估算");
                 });
             }
         }, handler);
     }
 
-    private int detectMiniMapSize(int[] pixels, int w, int h) {
-        int scanH = Math.min(h, (int) (Math.min(w, h) * 0.45f));
-        int scanW = scanH;
-        int edgeRight = 0;
-        int edgeBottom = 0;
-        for (int y = scanH / 6; y < scanH; y += 2) {
-            int darkRun = 0;
-            int lastDark = -1;
-            for (int x = 0; x < scanW; x++) {
-                int px = pixels[y * w + x];
-                int r = (px >> 16) & 0xff;
-                int g = (px >> 8) & 0xff;
-                int b = px & 0xff;
-                float brightness = 0.299f * r + 0.587f * g + 0.114f * b;
-                if (brightness < 80) {
-                    darkRun++;
-                    lastDark = x;
-                } else {
-                    if (darkRun >= 2 && lastDark > edgeRight && lastDark > scanW / 6) {
-                        int nextBright = 0;
-                        for (int nx = lastDark + 1; nx < Math.min(lastDark + 20, scanW); nx++) {
-                            int npx = pixels[y * w + nx];
-                            float nb = 0.299f * ((npx >> 16) & 0xff) + 0.587f * ((npx >> 8) & 0xff) + 0.114f * (npx & 0xff);
-                            if (nb > 100) nextBright++;
-                        }
-                        if (nextBright >= 8) {
-                            edgeRight = Math.max(edgeRight, lastDark);
-                        }
-                    }
-                    darkRun = 0;
+    private MiniMapBounds detectMiniMapBounds(int[] pixels, int w, int h) {
+        if (pixels == null || pixels.length < w * h || w <= 0 || h <= 0) return null;
+        int shortSide = Math.min(w, h);
+        int minSize = clamp(Math.round(shortSide * 0.18f), dp(MIN_OVERLAY_DP), Math.min(shortSide, dp(MAX_OVERLAY_DP)));
+        int maxSize = clamp(Math.round(shortSide * 0.42f), minSize, Math.min(shortSide, dp(MAX_OVERLAY_DP)));
+        int sizeStep = Math.max(14, shortSide / 18);
+        MiniMapBounds best = null;
+
+        for (int size = minSize; size <= maxSize; size += sizeStep) {
+            int posStep = Math.max(14, size / 7);
+            best = scanMiniMapCandidates(pixels, w, h, size, posStep, 0, 0, w - size, h - size, best);
+        }
+        if (best == null) return null;
+
+        int refineRange = Math.max(16, best.size / 4);
+        int refineMinSize = clamp(best.size - refineRange, minSize, maxSize);
+        int refineMaxSize = clamp(best.size + refineRange, refineMinSize, maxSize);
+        int refineStep = Math.max(4, best.size / 28);
+        for (int size = refineMinSize; size <= refineMaxSize; size += refineStep) {
+            int minX = clamp(best.left - refineRange, 0, Math.max(0, w - size));
+            int maxX = clamp(best.left + refineRange, minX, Math.max(0, w - size));
+            int minY = clamp(best.top - refineRange, 0, Math.max(0, h - size));
+            int maxY = clamp(best.top + refineRange, minY, Math.max(0, h - size));
+            best = scanMiniMapCandidates(pixels, w, h, size, refineStep, minX, minY, maxX, maxY, best);
+        }
+        return best != null && best.score >= 34f ? best : null;
+    }
+
+    private MiniMapBounds scanMiniMapCandidates(int[] pixels, int w, int h, int size, int step,
+                                                int minX, int minY, int maxX, int maxY, MiniMapBounds best) {
+        if (size <= 0 || maxX < minX || maxY < minY) return best;
+        for (int y = minY; y <= maxY; y += step) {
+            for (int x = minX; x <= maxX; x += step) {
+                float score = scoreMiniMapCandidate(pixels, w, h, x, y, size);
+                if (best == null || score > best.score) {
+                    best = new MiniMapBounds(x, y, size, score);
                 }
             }
         }
-        for (int x = scanW / 6; x < scanW; x += 2) {
-            int darkRun = 0;
-            int lastDark = -1;
-            for (int y = 0; y < scanH; y++) {
+        return best;
+    }
+
+    private float scoreMiniMapCandidate(int[] pixels, int w, int h, int left, int top, int size) {
+        int sampleStep = Math.max(4, size / 24);
+        int borderSamples = 0;
+        int darkBorder = 0;
+        float borderBrightness = 0f;
+        for (int i = 0; i <= size; i += sampleStep) {
+            int x = Math.min(w - 1, left + i);
+            int y = Math.min(h - 1, top + i);
+            int topPx = pixels[top * w + x];
+            int bottomPx = pixels[(top + size - 1) * w + x];
+            int leftPx = pixels[y * w + left];
+            int rightPx = pixels[y * w + left + size - 1];
+            borderBrightness += brightness(topPx) + brightness(bottomPx) + brightness(leftPx) + brightness(rightPx);
+            darkBorder += isMiniMapDark(topPx) ? 1 : 0;
+            darkBorder += isMiniMapDark(bottomPx) ? 1 : 0;
+            darkBorder += isMiniMapDark(leftPx) ? 1 : 0;
+            darkBorder += isMiniMapDark(rightPx) ? 1 : 0;
+            borderSamples += 4;
+        }
+        if (borderSamples == 0) return 0f;
+
+        int insideSamples = 0;
+        int darkInside = 0;
+        float insideSum = 0f;
+        float insideSqSum = 0f;
+        int grid = 7;
+        for (int gy = 1; gy < grid; gy++) {
+            int y = top + Math.round(size * (gy / (float) grid));
+            for (int gx = 1; gx < grid; gx++) {
+                int x = left + Math.round(size * (gx / (float) grid));
                 int px = pixels[y * w + x];
-                int r = (px >> 16) & 0xff;
-                int g = (px >> 8) & 0xff;
-                int b = px & 0xff;
-                float brightness = 0.299f * r + 0.587f * g + 0.114f * b;
-                if (brightness < 80) {
-                    darkRun++;
-                    lastDark = y;
-                } else {
-                    if (darkRun >= 2 && lastDark > edgeBottom && lastDark > scanH / 6) {
-                        int nextBright = 0;
-                        for (int ny = lastDark + 1; ny < Math.min(lastDark + 20, scanH); ny++) {
-                            int npx = pixels[ny * w + x];
-                            float nb = 0.299f * ((npx >> 16) & 0xff) + 0.587f * ((npx >> 8) & 0xff) + 0.114f * (npx & 0xff);
-                            if (nb > 100) nextBright++;
-                        }
-                        if (nextBright >= 8) {
-                            edgeBottom = Math.max(edgeBottom, lastDark);
-                        }
-                    }
-                    darkRun = 0;
-                }
+                float b = brightness(px);
+                insideSum += b;
+                insideSqSum += b * b;
+                if (isMiniMapDark(px)) darkInside++;
+                insideSamples++;
             }
         }
-        if (edgeRight > dp(40) && edgeBottom > dp(40)) {
-            return (edgeRight + edgeBottom) / 2;
+        if (insideSamples == 0) return 0f;
+
+        float borderDarkRatio = darkBorder / (float) borderSamples;
+        float insideDarkRatio = darkInside / (float) insideSamples;
+        float insideAvg = insideSum / insideSamples;
+        float variance = Math.max(0f, insideSqSum / insideSamples - insideAvg * insideAvg);
+        float textureScore = clamp((variance - 180f) / 1800f, 0f, 1f);
+        float balancedInside = clamp(1f - Math.abs(insideDarkRatio - 0.55f) / 0.55f, 0f, 1f);
+        float contrastScore = outsideContrastScore(pixels, w, h, left, top, size, borderBrightness / borderSamples);
+        float positionScore = 1f - Math.min(1f, (left / (float) w) * 0.35f + (top / (float) h) * 0.45f);
+
+        float score = borderDarkRatio * 43f
+                + balancedInside * 20f
+                + textureScore * 24f
+                + contrastScore * 9f
+                + positionScore * 4f;
+        if (borderDarkRatio < 0.24f || insideDarkRatio < 0.12f) score -= 24f;
+        if (insideDarkRatio > 0.94f && textureScore < 0.18f) score -= 34f;
+        return score;
+    }
+
+    private float outsideContrastScore(int[] pixels, int w, int h, int left, int top, int size, float borderAvg) {
+        int offset = Math.max(3, size / 26);
+        int sampleStep = Math.max(6, size / 14);
+        float sum = 0f;
+        int count = 0;
+        for (int i = 0; i <= size; i += sampleStep) {
+            int x = clamp(left + i, 0, w - 1);
+            int y = clamp(top + i, 0, h - 1);
+            if (top - offset >= 0) { sum += brightness(pixels[(top - offset) * w + x]); count++; }
+            if (top + size + offset < h) { sum += brightness(pixels[(top + size + offset) * w + x]); count++; }
+            if (left - offset >= 0) { sum += brightness(pixels[y * w + left - offset]); count++; }
+            if (left + size + offset < w) { sum += brightness(pixels[y * w + left + size + offset]); count++; }
         }
-        if (edgeRight > dp(40)) return edgeRight;
-        if (edgeBottom > dp(40)) return edgeBottom;
-        return 0;
+        if (count == 0) return 0f;
+        return clamp(Math.abs((sum / count) - borderAvg) / 90f, 0f, 1f);
+    }
+
+    private boolean isMiniMapDark(int px) {
+        return brightness(px) < 118f;
+    }
+
+    private float brightness(int px) {
+        int r = (px >> 16) & 0xff;
+        int g = (px >> 8) & 0xff;
+        int b = px & 0xff;
+        return 0.299f * r + 0.587f * g + 0.114f * b;
+    }
+
+    private static class MiniMapBounds {
+        final int left;
+        final int top;
+        final int size;
+        final float score;
+
+        MiniMapBounds(int left, int top, int size, float score) {
+            this.left = left;
+            this.top = top;
+            this.size = size;
+            this.score = score;
+        }
     }
 
     private int clamp(int value, int min, int max) {
@@ -671,6 +808,8 @@ public class NativeOverlayService extends Service {
         monsterY = prefs.getFloat("monster_y", 0f);
         mapX = prefs.getFloat("map_x", 0f);
         mapY = prefs.getFloat("map_y", 0f);
+        if (!prefs.contains("map_x") && prefs.contains("overlay_x")) mapX = prefs.getInt("overlay_x", 0);
+        if (!prefs.contains("map_y") && prefs.contains("overlay_y")) mapY = prefs.getInt("overlay_y", 0);
         skillX = prefs.getFloat("skill_x", 0f);
         skillY = prefs.getFloat("skill_y", 0f);
         mapScale = prefs.getFloat("map_scale", 1f);
@@ -685,11 +824,12 @@ public class NativeOverlayService extends Service {
         showMinions = prefs.getBoolean("show_minions", true);
         showMonsters = prefs.getBoolean("show_monsters", true);
         showSkillPanel = prefs.getBoolean("show_skill_panel", showSkillPanel);
-        showZeroSkillCd = prefs.getBoolean("show_zero_skill_cd", true);
+        showZeroSkillCd = prefs.getBoolean("show_zero_skill_cd", false);
+        panelAlpha = clamp(prefs.getFloat("adjust_panel_alpha", 0.88f), 0.45f, 1f);
         minionLaneRotationSteps = prefs.getInt("minion_lane_rotation_steps", 0);
         activeMainPage = prefs.getInt("adjust_main_page", activeMainPage);
         activeDrawTab = prefs.getInt("adjust_draw_tab", activeDrawTab);
-        if (activeMainPage < 0 || activeMainPage > 4) activeMainPage = 2;
+        if (activeMainPage < 0 || activeMainPage > 2) activeMainPage = 1;
         if (activeDrawTab < 0 || activeDrawTab > 4) activeDrawTab = 0;
     }
 
@@ -714,6 +854,7 @@ public class NativeOverlayService extends Service {
                 .putBoolean("show_monsters", showMonsters)
                 .putBoolean("show_skill_panel", showSkillPanel)
                 .putBoolean("show_zero_skill_cd", showZeroSkillCd)
+                .putFloat("adjust_panel_alpha", panelAlpha)
                 .putInt("minion_lane_rotation_steps", minionLaneRotationSteps)
                 .apply();
     }
@@ -792,7 +933,7 @@ public class NativeOverlayService extends Service {
             toggleButton.setTextColor(Color.WHITE);
             toggleButton.setPadding(0, 0, 0, 0);
             toggleButton.setAlpha(0.72f);
-            toggleButton.setBackground(makeBox(0x33000000, 0x44ffffff, dp(16)));
+            toggleButton.setBackground(makePanelHeaderBackground());
             toggleButton.setOnClickListener(v -> {
                 panelVisible = !panelVisible;
                 if (prefs == null) prefs = getSharedPreferences("alin_radar", MODE_PRIVATE);
@@ -842,15 +983,16 @@ public class NativeOverlayService extends Service {
         int sh = getResources().getDisplayMetrics().heightPixels;
         boolean landscape = sw > sh;
         panelParams.width = landscape
-                ? Math.max(dp(460), Math.min((int) (sw * 0.58f), dp(700)))
-                : Math.max(dp(300), Math.min((int) (sw * 0.92f), dp(430)));
+                ? clamp((int) (sw * 0.30f), dp(300), dp(460))
+                : clamp((int) (sw * 0.84f), dp(270), dp(360));
         panelParams.height = landscape
-                ? Math.max(dp(250), Math.min((int) (sh * 0.84f), dp(430)))
-                : Math.max(dp(300), Math.min((int) (sh * 0.56f), dp(520)));
+                ? clamp((int) (sh * 0.62f), dp(210), dp(330))
+                : clamp((int) (sh * 0.42f), dp(240), dp(420));
         int maxX = Math.max(0, (sw - panelParams.width) / 2);
         int maxY = Math.max(0, (sh - panelParams.height) / 2);
         panelParams.x = clamp(prefs.getInt("adjust_panel_x", 0), -maxX, maxX);
         panelParams.y = clamp(prefs.getInt("adjust_panel_y", 0), -maxY, maxY);
+        applyPanelAlpha();
     }
 
     private void savePanelPosition() {
@@ -881,8 +1023,7 @@ public class NativeOverlayService extends Service {
 
     private void updateRadarTouchMode() {
         if (params == null || windowManager == null || radarView == null) return;
-        int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
-        if (!adjustMode || !panelVisible) flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        int flags = overlayWindowFlags(!adjustMode || !panelVisible);
         if (params.flags != flags) {
             params.flags = flags;
             windowManager.updateViewLayout(radarView, params);
@@ -892,36 +1033,35 @@ public class NativeOverlayService extends Service {
     private LinearLayout buildAdjustPanel() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(6), dp(5), dp(6), dp(6));
-        root.setBackground(makeBox(panelBgColor(), panelStrokeColor(), dp(10)));
+        root.setPadding(dp(7), dp(6), dp(7), dp(7));
+        root.setBackground(new PocketPanelDrawable(dp(18)));
+        root.setAlpha(panelAlpha);
 
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
         top.setOnTouchListener(new PanelDragTouchListener());
-        top.setPadding(dp(4), 0, dp(4), 0);
-        top.setBackground(makeBox(panelHeaderColor(), panelStrokeColor(), dp(8)));
-        TextView title = panelText("ALinRadar", 13, true);
-        top.addView(title, new LinearLayout.LayoutParams(0, dp(38), 1));
-        Button midHide = panelButton("锁定");
-        midHide.setOnClickListener(v -> hidePanelOnly());
-        top.addView(midHide, new LinearLayout.LayoutParams(dp(58), dp(30)));
+        top.setPadding(dp(6), 0, dp(5), 0);
+        top.setBackground(makePanelHeaderBackground());
+        TextView title = panelText("雷达面板", 13, true);
+        title.setTextColor(0xffffffff);
+        top.addView(title, new LinearLayout.LayoutParams(0, dp(34), 1));
         Button save = panelButton("保存");
         save.setOnClickListener(v -> saveAdjustPrefs());
-        Button hide = panelButton("隐藏");
+        Button hide = panelButton("收起");
         hide.setOnClickListener(v -> hidePanelOnly());
-        top.addView(save, new LinearLayout.LayoutParams(dp(52), dp(30)));
-        top.addView(hide, new LinearLayout.LayoutParams(dp(52), dp(30)));
-        root.addView(top, new LinearLayout.LayoutParams(-1, dp(38)));
+        top.addView(save, new LinearLayout.LayoutParams(dp(48), dp(27)));
+        top.addView(hide, new LinearLayout.LayoutParams(dp(48), dp(27)));
+        root.addView(top, new LinearLayout.LayoutParams(-1, dp(34)));
 
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.HORIZONTAL);
 
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.VERTICAL);
-        nav.setPadding(dp(3), dp(3), dp(3), dp(3));
-        nav.setBackground(makeBox(panelInsetColor(), panelStrokeColor(), dp(8)));
-        String[] names = new String[]{"主页", "绘制", "设置", "触摸", "内存"};
+        nav.setPadding(dp(3), dp(4), dp(3), dp(4));
+        nav.setBackground(makePanelNavBackground());
+        String[] names = new String[]{"房间", "绘制", "面板"};
         mainNavButtons = new Button[names.length];
         for (int i = 0; i < names.length; i++) {
             final int page = i;
@@ -934,24 +1074,27 @@ public class NativeOverlayService extends Service {
                 savePanelPage();
                 renderPanelPage();
             });
-            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(-1, dp(32));
-            rowLp.bottomMargin = dp(4);
+            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(-1, dp(29));
+            rowLp.bottomMargin = dp(5);
             nav.addView(row, rowLp);
             mainNavButtons[i] = row;
         }
-        content.addView(nav, new LinearLayout.LayoutParams(dp(68), -1));
+        content.addView(nav, new LinearLayout.LayoutParams(dp(58), -1));
 
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(false);
-        scroll.setBackground(makeBox(panelContentColor(), panelStrokeColor(), dp(8)));
+        scroll.setBackground(makePanelContentBackground());
         panelContent = new LinearLayout(this);
         panelContent.setOrientation(LinearLayout.VERTICAL);
-        panelContent.setPadding(dp(6), dp(5), dp(6), dp(5));
+        panelContent.setPadding(dp(7), dp(6), dp(7), dp(6));
         scroll.addView(panelContent, new ScrollView.LayoutParams(-1, -2));
         LinearLayout.LayoutParams ctlLp = new LinearLayout.LayoutParams(0, -1, 1);
-        ctlLp.leftMargin = dp(6);
+        ctlLp.leftMargin = dp(7);
+        ctlLp.topMargin = dp(7);
         content.addView(scroll, ctlLp);
-        root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout.LayoutParams contentLp = new LinearLayout.LayoutParams(-1, 0, 1);
+        contentLp.topMargin = dp(7);
+        root.addView(content, contentLp);
         renderPanelPage();
         return root;
     }
@@ -969,31 +1112,16 @@ public class NativeOverlayService extends Service {
         panelContent.removeAllViews();
         updatePanelButtons();
         if (activeMainPage == 0) {
-            panelContent.addView(panelText("主页区域", 13, true), new LinearLayout.LayoutParams(-1, dp(24)));
+            panelContent.addView(panelText("房间", 13, true), new LinearLayout.LayoutParams(-1, dp(24)));
             renderPanelRoomChooser();
-            addPanelAction(panelContent, sProjectionData != null ? "一键适配(截屏识别)" : "一键适配(按分辨率)", this::autoFitResolution);
-            addPanelAction(panelContent, "保存", this::saveAdjustPrefs);
-            addPanelAction(panelContent, "退出面板", () -> {
-                adjustMode = false;
-                if (prefs == null) prefs = getSharedPreferences("alin_radar", MODE_PRIVATE);
-                prefs.edit().putBoolean("overlay_adjust_mode", false).apply();
-                hideAdjustControls();
-                updateRadarTouchMode();
-            });        } else if (activeMainPage == 1) {
-            addToggleRow(panelContent, "地图显示", showMap, on -> { showMap = on; applyAllAdjustments(true); });
-            addToggleRow(panelContent, "英雄头像", showHeroes, on -> { showHeroes = on; applyAllAdjustments(true); });
-            addToggleRow(panelContent, "技能面板", showSkillPanel, on -> { showSkillPanel = on; applyAllAdjustments(true); applyOverlaySize(currentOverlaySize()); });
-            addToggleRow(panelContent, "兵线绘制", showMinions, on -> { showMinions = on; applyAllAdjustments(true); });
-            addToggleRow(panelContent, "野怪计时", showMonsters, on -> { showMonsters = on; applyAllAdjustments(true); });
-            addToggleRow(panelContent, "人物射线", false, on -> {});
-            addToggleRow(panelContent, "触摸透传", !panelVisible, on -> hidePanelOnly());
-        } else if (activeMainPage == 2) {
-            renderSettingPage();
-        } else if (activeMainPage == 3) {
-            addToggleRow(panelContent, "隐藏后透触", true, on -> {});
-            addToggleRow(panelContent, "调节时可拖动雷达", true, on -> {});
+            addPanelAction(panelContent, "一键适配", this::autoFitResolution);
+        } else if (activeMainPage == 1) {
+            renderGroupedSettingPage();
+        } else {
+            panelContent.addView(panelText("面板", 13, true), new LinearLayout.LayoutParams(-1, dp(24)));
+            addPanelAlphaRow(panelContent);
             addPanelAction(panelContent, "面板居中", this::centerAdjustPanel);
-            addPanelAction(panelContent, "隐藏调节并锁定触摸", this::hidePanelOnly);
+            addPanelAction(panelContent, "收起面板", this::hidePanelOnly);
             addPanelAction(panelContent, "显示调节", () -> {
                 panelVisible = true;
                 if (prefs == null) prefs = getSharedPreferences("alin_radar", MODE_PRIVATE);
@@ -1001,10 +1129,17 @@ public class NativeOverlayService extends Service {
                 updatePanelVisibility();
                 updateRadarTouchMode();
             });
-        } else {
-            panelContent.addView(panelText("内存区域", 13, true), new LinearLayout.LayoutParams(-1, dp(28)));
-            panelContent.addView(panelText("当前版本不读取内存，仅显示服务器雷达数据", 12, false), new LinearLayout.LayoutParams(-1, dp(32)));
-            addPanelAction(panelContent, "保存", this::saveAdjustPrefs);
+            addPanelAction(panelContent, "退出调节", () -> {
+                adjustMode = false;
+                if (prefs == null) prefs = getSharedPreferences("alin_radar", MODE_PRIVATE);
+                prefs.edit().putBoolean("overlay_adjust_mode", false).apply();
+                hideAdjustControls();
+                updateRadarTouchMode();
+            });
+            addPanelAction(panelContent, "关闭悬浮窗", () -> {
+                running = false;
+                stopSelf();
+            });
         }
     }
 
@@ -1031,7 +1166,7 @@ public class NativeOverlayService extends Service {
         panelRoomButton = panelButton("当前: " + currentRoomLabel());
         roomCountText = panelText(roomNames.size() + "间", 12, true);
         roomCountText.setGravity(Gravity.CENTER);
-        roomCountText.setBackground(makeBox(panelButtonColor(false), panelStrokeColor(), dp(6)));
+        roomCountText.setBackground(makePanelButtonBackground(false));
         header.addView(panelRoomButton, new LinearLayout.LayoutParams(0, dp(36), 1));
         LinearLayout.LayoutParams countLp = new LinearLayout.LayoutParams(dp(54), dp(36));
         countLp.leftMargin = dp(6);
@@ -1041,7 +1176,7 @@ public class NativeOverlayService extends Service {
         ScrollView roomScroll = new ScrollView(this);
         roomScroll.setFillViewport(false);
         roomScroll.setNestedScrollingEnabled(true);
-        roomScroll.setBackground(makeBox(panelInsetColor(), panelStrokeColor(), dp(7)));
+        roomScroll.setBackground(makePanelNavBackground());
         roomScroll.setOnTouchListener((v, ev) -> { v.getParent().requestDisallowInterceptTouchEvent(true); return false; });
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
@@ -1058,7 +1193,8 @@ public class NativeOverlayService extends Service {
                 room.setGravity(Gravity.CENTER_VERTICAL);
                 room.setPadding(dp(10), 0, dp(10), 0);
                 boolean selected = name != null && name.equals(roomId);
-                room.setBackground(makeBox(panelButtonColor(selected), panelStrokeColor(), dp(6)));
+                room.setTextColor(selected ? 0xffffffff : panelTextColor());
+                room.setBackground(makePanelButtonBackground(selected));
                 room.setOnClickListener(v -> switchPanelRoom(name));
                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(38));
                 lp.bottomMargin = dp(4);
@@ -1199,14 +1335,14 @@ public class NativeOverlayService extends Service {
     private void updatePanelButtons() {
         if (mainNavButtons != null) {
             for (int i = 0; i < mainNavButtons.length; i++) {
-                mainNavButtons[i].setTextColor(panelTextColor());
-                mainNavButtons[i].setBackground(makeBox(panelButtonColor(i == activeMainPage), panelStrokeColor(), dp(5)));
+                mainNavButtons[i].setTextColor(i == activeMainPage ? 0xffffffff : panelTextColor());
+                mainNavButtons[i].setBackground(makePanelButtonBackground(i == activeMainPage));
             }
         }
         if (tabButtons != null) {
             for (int i = 0; i < tabButtons.length; i++) {
-                tabButtons[i].setTextColor(panelTextColor());
-                tabButtons[i].setBackground(makeBox(panelButtonColor(i == activeDrawTab), panelStrokeColor(), dp(5)));
+                tabButtons[i].setTextColor(i == activeDrawTab ? 0xffffffff : panelTextColor());
+                tabButtons[i].setBackground(makePanelButtonBackground(i == activeDrawTab));
             }
         }
     }
@@ -1246,6 +1382,44 @@ public class NativeOverlayService extends Service {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(32));
         lp.topMargin = dp(4);
         parent.addView(button, lp);
+    }
+
+    private void addPanelAlphaRow(LinearLayout parent) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        TextView value = panelText(Math.round(panelAlpha * 100) + "%", 11, false);
+        value.setGravity(Gravity.CENTER);
+        SeekBar bar = new SeekBar(this);
+        stylePanelSeekBar(bar);
+        final int min = 45;
+        final int max = 100;
+        final int range = max - min;
+        bar.setMax(range);
+        bar.setProgress(clamp(Math.round(panelAlpha * 100) - min, 0, range));
+        Runnable applyAlpha = () -> {
+            int next = min + bar.getProgress();
+            panelAlpha = clamp(next / 100f, 0.45f, 1f);
+            value.setText(next + "%");
+            applyPanelAlpha();
+            if (prefs == null) prefs = getSharedPreferences("alin_radar", MODE_PRIVATE);
+            prefs.edit().putFloat("adjust_panel_alpha", panelAlpha).apply();
+        };
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) { applyAlpha.run(); }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+        Button minus = panelButton("-");
+        minus.setOnClickListener(v -> { bar.setProgress(Math.max(0, bar.getProgress() - 5)); applyAlpha.run(); });
+        Button plus = panelButton("+");
+        plus.setOnClickListener(v -> { bar.setProgress(Math.min(range, bar.getProgress() + 5)); applyAlpha.run(); });
+        row.addView(panelText("Alpha", 10, false), new LinearLayout.LayoutParams(dp(52), dp(36)));
+        row.addView(minus, new LinearLayout.LayoutParams(dp(26), dp(26)));
+        row.addView(bar, new LinearLayout.LayoutParams(0, dp(36), 1));
+        row.addView(plus, new LinearLayout.LayoutParams(dp(26), dp(26)));
+        row.addView(value, new LinearLayout.LayoutParams(dp(44), dp(36)));
+        parent.addView(row, new LinearLayout.LayoutParams(-1, dp(38)));
     }
 
     private void addControlRow(LinearLayout parent, String label, String target, boolean isX, int min, int max, int current) {
@@ -1323,8 +1497,8 @@ public class NativeOverlayService extends Service {
             int accent = panelAccentColor();
             bar.setSplitTrack(false);
             bar.setProgressTintList(ColorStateList.valueOf(accent));
-            bar.setProgressBackgroundTintList(ColorStateList.valueOf(0x667c8aa5));
-            bar.setThumbTintList(ColorStateList.valueOf(accent));
+            bar.setProgressBackgroundTintList(ColorStateList.valueOf(0x55b6eaff));
+            bar.setThumbTintList(ColorStateList.valueOf(0xffffd84d));
         }
     }
     private float currentOffsetX(String target) {
@@ -1362,7 +1536,7 @@ public class NativeOverlayService extends Service {
         button.setTextSize(12);
         button.setTextColor(panelTextColor());
         button.setPadding(0, 0, 0, 0);
-        button.setBackground(makeBox(panelButtonColor(false), panelStrokeColor(), dp(7)));
+        button.setBackground(makePanelButtonBackground(false));
         return button;
     }
 
@@ -1372,63 +1546,73 @@ public class NativeOverlayService extends Service {
     }
 
     private int panelBgColor() {
-        int theme = panelTheme();
-        if (theme == 3) return 0x88052e2b;
-        if (theme == 1) return 0x88111827;
-        if (theme == 2) return 0x99eeeffd;
-        return 0x99f8fafc;
+        return 0xeef8fdff;
     }
 
     private int panelInsetColor() {
-        int theme = panelTheme();
-        if (theme == 3) return 0x66082f2c;
-        if (theme == 1) return 0x660b1220;
-        if (theme == 2) return 0x77e0f2fe;
-        return 0x77ffffff;
+        return 0xccdff7ff;
     }
 
     private int panelHeaderColor() {
-        int theme = panelTheme();
-        if (theme == 3) return 0x88064e3b;
-        if (theme == 1) return 0x880f172a;
-        if (theme == 2) return 0x990284c7;
-        return 0x992563eb;
+        return 0xff0ea5e9;
     }
 
     private int panelContentColor() {
-        int theme = panelTheme();
-        if (theme == 3) return 0x550f172a;
-        if (theme == 1) return 0x55020617;
-        if (theme == 2) return 0x66eff6ff;
-        return 0x66f8fafc;
+        return 0xdfffffff;
     }
 
     private int panelStrokeColor() {
-        int theme = panelTheme();
-        if (theme == 3) return 0x7734d399;
-        if (theme == 1) return 0x7760a5fa;
-        if (theme == 2) return 0x7760a5fa;
-        return 0x7738bdf8;
+        return 0xff38bdf8;
     }
 
     private int panelTextColor() {
-        int theme = panelTheme();
-        return (theme == 1 || theme == 3) ? 0xffffffff : 0xff0f172a;
+        return 0xff073b5f;
     }
 
     private int panelButtonColor(boolean active) {
-        int theme = panelTheme();
-        if (theme == 3) return active ? 0x99059669 : 0x44334d42;
-        if (theme == 1) return active ? 0x990284c7 : 0x44334155;
-        if (theme == 2) return active ? 0x9938bdf8 : 0x66bfdbfe;
-        return active ? 0x9938bdf8 : 0x66bae6fd;
+        return active ? 0xff0ea5e9 : 0xeef4fbff;
     }
 
     private int panelAccentColor() {
-        int theme = panelTheme();
-        if (theme == 3) return 0xff34d399;
-        if (theme == 1) return 0xff38bdf8;
-        return 0xff2563eb;
+        return 0xff0284c7;
+    }
+
+    private GradientDrawable makePanelHeaderBackground() {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[]{0xff0284c7, 0xff0ea5e9, 0xff38bdf8});
+        drawable.setCornerRadius(dp(14));
+        drawable.setStroke(dp(1), 0xffffffff);
+        return drawable;
+    }
+
+    private GradientDrawable makePanelContentBackground() {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xf7ffffff, 0xe9e0f7ff});
+        drawable.setCornerRadius(dp(15));
+        drawable.setStroke(dp(1), 0xcc7dd3fc);
+        return drawable;
+    }
+
+    private GradientDrawable makePanelNavBackground() {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xf2ffffff, 0xd7bae6fd});
+        drawable.setCornerRadius(dp(15));
+        drawable.setStroke(dp(1), 0xbb7dd3fc);
+        return drawable;
+    }
+
+    private GradientDrawable makePanelButtonBackground(boolean active) {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                active
+                        ? new int[]{0xff0284c7, 0xff38bdf8}
+                        : new int[]{0xfaffffff, 0xe6e0f7ff});
+        drawable.setCornerRadius(dp(999));
+        drawable.setStroke(dp(1), active ? 0xffffffff : 0xaa7dd3fc);
+        return drawable;
     }
 
     private GradientDrawable makeBox(int color, int strokeColor, int radius) {
@@ -1437,6 +1621,142 @@ public class NativeOverlayService extends Service {
         drawable.setCornerRadius(radius);
         drawable.setStroke(dp(1), strokeColor);
         return drawable;
+    }
+
+    private void applyPanelAlpha() {
+        if (adjustPanel != null) adjustPanel.setAlpha(panelAlpha);
+    }
+
+    private int overlayWindowFlags(boolean notTouchable) {
+        int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
+        if (Build.VERSION.SDK_INT >= 19) {
+            flags |= WindowManager.LayoutParams.FLAG_LAYOUT_INSET_DECOR;
+        }
+        if (notTouchable) flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        return flags;
+    }
+
+    private void applyCutoutMode(WindowManager.LayoutParams layoutParams) {
+        if (Build.VERSION.SDK_INT >= 28) {
+            layoutParams.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        }
+    }
+
+    private static class PocketPanelDrawable extends Drawable {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF rect = new RectF();
+        private final float radius;
+        private int alpha = 255;
+
+        PocketPanelDrawable(float radius) {
+            this.radius = radius;
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            rect.set(getBounds());
+            paint.setAlpha(alpha);
+            paint.setShader(new LinearGradient(
+                    rect.left, rect.top, rect.right, rect.bottom,
+                    new int[]{0xff0ea5e9, 0xff38bdf8, 0xffeffbff},
+                    new float[]{0f, 0.48f, 1f},
+                    Shader.TileMode.CLAMP));
+            canvas.drawRoundRect(rect, radius, radius, paint);
+
+            paint.setShader(null);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(2f, radius * 0.10f));
+            paint.setColor(0xeaffffff);
+            paint.setAlpha(alpha);
+            canvas.drawRoundRect(inset(rect, 2f), radius * 0.92f, radius * 0.92f, paint);
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0xffff4b5f);
+            paint.setAlpha(Math.round(alpha * 0.92f));
+            float collarTop = rect.top + rect.height() * 0.16f;
+            canvas.drawRoundRect(
+                    new RectF(rect.left + rect.width() * 0.08f, collarTop,
+                            rect.right - rect.width() * 0.08f, collarTop + Math.max(5f, rect.height() * 0.022f)),
+                    radius * 0.55f, radius * 0.55f, paint);
+
+            paint.setColor(0xeaffffff);
+            paint.setAlpha(Math.round(alpha * 0.82f));
+            RectF belly = new RectF(
+                    rect.left + rect.width() * 0.20f,
+                    rect.top + rect.height() * 0.26f,
+                    rect.right - rect.width() * 0.10f,
+                    rect.bottom - rect.height() * 0.08f);
+            canvas.drawRoundRect(belly, radius * 1.18f, radius * 1.18f, paint);
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(2f, radius * 0.12f));
+            paint.setColor(0xff25a9e0);
+            paint.setAlpha(Math.round(alpha * 0.62f));
+            RectF pocket = new RectF(
+                    rect.left + rect.width() * 0.39f,
+                    rect.top + rect.height() * 0.55f,
+                    rect.right - rect.width() * 0.17f,
+                    rect.bottom - rect.height() * 0.13f);
+            canvas.drawArc(pocket, 0, 180, false, paint);
+            canvas.drawLine(pocket.left, pocket.centerY(), pocket.right, pocket.centerY(), paint);
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0xffffd84d);
+            paint.setAlpha(Math.round(alpha * 0.95f));
+            float bellR = Math.max(5f, rect.height() * 0.035f);
+            float bellCx = rect.left + rect.width() * 0.18f;
+            float bellCy = collarTop + bellR * 1.05f;
+            canvas.drawCircle(bellCx, bellCy, bellR, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(1f, bellR * 0.16f));
+            paint.setColor(0xffb45309);
+            paint.setAlpha(Math.round(alpha * 0.75f));
+            canvas.drawCircle(bellCx, bellCy, bellR * 0.82f, paint);
+            canvas.drawLine(bellCx - bellR * 0.55f, bellCy - bellR * 0.12f, bellCx + bellR * 0.55f, bellCy - bellR * 0.12f, paint);
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setAlpha(Math.round(alpha * 0.70f));
+            drawBubble(canvas, rect.left + rect.width() * 0.09f, rect.top + rect.height() * 0.33f, radius * 0.23f, 0xffffffff);
+            drawBubble(canvas, rect.left + rect.width() * 0.89f, rect.top + rect.height() * 0.24f, radius * 0.18f, 0xffffffff);
+            drawBubble(canvas, rect.left + rect.width() * 0.13f, rect.bottom - rect.height() * 0.16f, radius * 0.16f, 0xffffd84d);
+
+            paint.setAlpha(255);
+            paint.setShader(null);
+            paint.setStyle(Paint.Style.FILL);
+        }
+
+        private void drawBubble(Canvas canvas, float cx, float cy, float r, int color) {
+            paint.setColor(color);
+            canvas.drawCircle(cx, cy, r, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(1f, r * 0.20f));
+            paint.setColor(0xaa0284c7);
+            canvas.drawCircle(cx, cy, r * 0.78f, paint);
+            paint.setStyle(Paint.Style.FILL);
+        }
+
+        private RectF inset(RectF source, float amount) {
+            return new RectF(source.left + amount, source.top + amount, source.right - amount, source.bottom - amount);
+        }
+
+        @Override
+        public void setAlpha(int alpha) {
+            this.alpha = alpha;
+            invalidateSelf();
+        }
+
+        @Override
+        public void setColorFilter(ColorFilter colorFilter) {
+            paint.setColorFilter(colorFilter);
+            invalidateSelf();
+        }
+
+        @Override
+        public int getOpacity() {
+            return PixelFormat.TRANSLUCENT;
+        }
     }
 
     private class DragTouchListener implements View.OnTouchListener {

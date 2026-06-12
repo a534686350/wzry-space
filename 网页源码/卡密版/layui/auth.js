@@ -225,12 +225,17 @@
         if (state.started) return;
         state.started = true;
 
+        if (typeof window.__cardOriginalInitApp !== "function" && typeof window.initApp === "function" && window.initApp !== ensureAuthorized) {
+            window.__cardOriginalInitApp = window.initApp;
+        }
+
         if (typeof window.__cardOriginalInitApp === "function") {
             window.__cardOriginalInitApp();
         }
     }
 
     function ensureAuthorized() {
+        installGate();
         injectStyle();
 
         if (!getToken()) {

@@ -8,7 +8,7 @@
         { id: 'install-nginx', label: '安装 Nginx' },
         { id: 'install-php',   label: '配置 PHP（卡密版）' },
         { id: 'prepare-dir',   label: '创建站点目录' },
-        { id: 'upload',        label: '上传/拉取源码' },
+        { id: 'upload',        label: '准备项目文件' },
         { id: 'nginx-config',  label: '配置 Nginx (自选端口)' },
         { id: 'java-service',  label: '启动 Java 服务 (8888)' },
         { id: 'firewall',      label: '放行防火墙端口' },
@@ -53,6 +53,7 @@
     const state = {
         deploying: false,
         rawLog: [],
+        opsInstallCodeRequired: true,
     };
     const modeLabels = {
         clean: '纯净版',
@@ -76,15 +77,24 @@
             if (els.cardAdminField) els.cardAdminField.classList.toggle('hidden', !isCard);
             if (els.cardAdminPass) els.cardAdminPass.required = !!isCard;
             if (els.opsConfig) els.opsConfig.classList.toggle('hidden', !isOps);
-            if (els.opsInstallCode) els.opsInstallCode.required = !!isOps;
+            syncOpsInstallCodeRequired();
         };
         radios.forEach((r) => r.addEventListener('change', sync));
         sync();
     }
 
+    function syncOpsInstallCodeRequired() {
+        const mode = document.querySelector('input[name="deployMode"]:checked');
+        const isOps = mode && mode.value === 'ops';
+        if (els.opsInstallCode) els.opsInstallCode.required = !!(isOps && state.opsInstallCodeRequired);
+    }
+
     async function bootMeta() {
         try {
-            await fetch('/api/meta', { cache: 'no-store' });
+            const res = await fetch('/api/meta', { cache: 'no-store' });
+            const meta = await res.json().catch(() => ({}));
+            state.opsInstallCodeRequired = meta.opsInstallCodeRequired !== false;
+            syncOpsInstallCodeRequired();
             initSocket();
         } catch (err) {
             // 即使 /api/meta 失败，也尝试直接连 socket
@@ -333,7 +343,7 @@
             deployCard: String(fd.get('deployCard') || '').trim(),
             host: String(fd.get('host') || '').trim(),
             port: Number(fd.get('port') || 22),
-            sitePort: Number(fd.get('sitePort') || 80),
+            sitePort: Number(fd.get('sitePort')),
             username: String(fd.get('username') || '').trim(),
             password: String(fd.get('password') || ''),
             deployMode: String(fd.get('deployMode') || 'clean'),
@@ -379,7 +389,7 @@
             return;
         }
         if (payload.deployMode === 'ops') {
-            if (!payload.opsInstallCode) {
+            if (state.opsInstallCodeRequired && !payload.opsInstallCode) {
                 appendLog('error', '运营版需要填写安装授权码');
                 return;
             }
@@ -453,7 +463,7 @@
             deployCard: String(fd.get('deployCard') || '').trim(),
             host: String(fd.get('host') || '').trim(),
             port: Number(fd.get('port') || 22),
-            sitePort: Number(fd.get('sitePort') || 80),
+            sitePort: Number(fd.get('sitePort')),
             username: String(fd.get('username') || '').trim(),
             password: String(fd.get('password') || ''),
         };
@@ -476,22 +486,6 @@
     });
     els.btnClearLog.addEventListener('click', clearLog);
     els.btnDownloadLog.addEventListener('click', downloadLog);
-
-
-    document.addEventListener('click', (e) => {
-        const btn = e.target.closest('.copy-command');
-        if (!btn) return;
-        const target = document.getElementById(btn.dataset.copyTarget || '');
-        if (!target) return;
-        copyText(target.textContent.trim());
-        const old = btn.textContent;
-        btn.classList.add('copied');
-        btn.textContent = '已复制';
-        setTimeout(() => {
-            btn.classList.remove('copied');
-            btn.textContent = old;
-        }, 1400);
-    });
 
     // Password toggle
     document.addEventListener('click', (e) => {

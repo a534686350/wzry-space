@@ -1225,15 +1225,6 @@ if ($module !== '') {
         .radar-ws-hud-sep { opacity: 0.45; margin: 0 8px; }
         #wsLatencyText { color: #cbd5e1; }
         #wsReconnectText { color: #94a3b8; }
-        .radar-scroll-hint {
-            font-size: 11px;
-            color: #94a3b8;
-            margin-top: 6px;
-            text-align: center;
-            line-height: 1.5;
-            user-select: none;
-        }
-        
         /* Canvas旋转样式 */
         .rotate0{transform: rotate(0deg);}
         .rotate180{transform: rotate(180deg);}
@@ -1401,7 +1392,6 @@ if ($module !== '') {
             <div class="radar-ws-hud" id="radarWsHud" title="共享延迟：需 gameData 包末尾带 ###ST:13位毫秒时间戳（由共享端或 Jar 在打包时写入）；无则显示「同步延迟」（网页拉取往返）。重连：断线后自动连上次数（不含首次）">
                 <span id="wsLatencyText">共享延迟: --</span><span class="radar-ws-hud-sep" aria-hidden="true">|</span><span id="wsReconnectText">重连: 0</span>
             </div>
-            <p class="radar-scroll-hint" role="note">往下滑加群交流反馈</p>
         </section>
 
         <!-- 侧边栏切换按钮（固定在右侧顶部，可拖动） -->
@@ -1563,29 +1553,6 @@ if ($module !== '') {
                 </div>
             </div>
 
-            <!-- 加Q群卡片（登录后显示） -->
-            <div class="panel panel-collapsible" id="qqGroupPanel" style="display:none;">
-                <button type="button" class="panel-collapsible-toggle" id="qqGroupToggle" aria-expanded="false" aria-controls="qqGroupContent">
-                    <span class="panel-collapsible-title">加入Q群获取支持</span>
-                    <span class="panel-collapsible-icon" id="qqGroupIcon" aria-hidden="true">▶</span>
-                </button>
-                <div class="panel-collapsible-content" id="qqGroupContent" hidden>
-                    <div style="font-size:12px;color:#94a3b8;line-height:1.6;margin-bottom:10px;">
-                        点击下方按钮跳转加入QQ群，获取技术支持与更新公告。
-                    </div>
-                    <button
-                        id="btnJoinQGroup"
-                        type="button"
-                        class="share-link-btn"
-                        style="width:100%;"
-                        data-url="https://qm.qq.com/q/bhZLKSPN6w"
-                        data-group-id="1072788749"
-                    >跳转加Q群</button>
-                    <div class="share-link-tip" style="margin-top:10px;">
-                    </div>
-                </div>
-            </div>
-            
             <!-- 消息提示 -->
             <div id="errorMessage" class="message error" style="display:none;"></div>
             <div id="successMessage" class="message success" style="display:none;"></div>
@@ -1720,9 +1687,6 @@ if ($module !== '') {
             if (!panel) return;
             panel.style.display = 'block';
 
-            // 展示“加入Q群”卡片（无论是否拿到用户信息，也尽量让按钮可用）
-            initQQGroupPanel();
-
             var output = document.getElementById('shareLinkOutput');
             var btnGen = document.getElementById('btnGenerateShareLink');
             var btnCopy = document.getElementById('btnCopyShareLink');
@@ -1805,36 +1769,6 @@ if ($module !== '') {
             }
         }
 
-        function initQQGroupPanel() {
-            var qqPanel = document.getElementById('qqGroupPanel');
-            if (qqPanel) qqPanel.style.display = 'block';
-            var btnJoin = document.getElementById('btnJoinQGroup');
-            if (btnJoin && !btnJoin._bound) {
-                btnJoin._bound = true;
-                btnJoin.onclick = function() {
-                    var url = btnJoin.getAttribute('data-url') || '';
-                    var groupId = btnJoin.getAttribute('data-group-id') || '';
-                    if (!url || url === '#') {
-                        if (!groupId) {
-                            showError('请先在代码中配置QQ群：修改按钮 data-group-id 为你的群号', 4000);
-                            return;
-                        }
-                        // 邀请链接缺失时：打开QQ群查找页 + 尝试复制群号
-                        try {
-                            if (navigator.clipboard && navigator.clipboard.writeText) {
-                                navigator.clipboard.writeText(groupId);
-                            }
-                        } catch (e) {}
-                        showSuccess('已复制群号并打开QQ群查找页（' + groupId + '）', 2500);
-                        var findUrl = 'https://id.qq.com/groupv2/?word=' + encodeURIComponent(groupId);
-                        window.open(findUrl, '_blank', 'noopener');
-                        return;
-                    }
-                    window.open(url, '_blank', 'noopener');
-                };
-            }
-        }
-        
         function setMainEntryBlockedOverlay(msg) {
             try {
                 if (window.__mainEntry503Shown) return;
@@ -1897,8 +1831,6 @@ if ($module !== '') {
                 .then(function(res) {
                     if (res === null) return;
                     if (res && res.allowed === true) {
-                        // 分享 token/未登录情况下也展示“加入Q群”卡片
-                        initQQGroupPanel();
                         initApp();
                         // 分享token模式下跳过公告拉取，避免额外并发请求影响共享传输稳定性
                         if (!__shareTokenMode) {
@@ -5431,8 +5363,6 @@ if ($module !== '') {
             initCollapsiblePanel('shareLinkToggle', 'shareLinkContent', 'shareLinkIcon');
             initCollapsiblePanel('mapCalibToggle', 'mapCalibContent', 'mapCalibIcon');
             initMapCalibrationPanel();
-            initCollapsiblePanel('qqGroupToggle', 'qqGroupContent', 'qqGroupIcon');
-
             // 英雄、兵线、野怪子折叠面板（互斥展开）
             function initOffsetPanel(toggleId, contentId, iconId) {
                 var toggle = document.getElementById(toggleId);
