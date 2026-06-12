@@ -149,6 +149,23 @@ function ensureAppSettingsTable(PDO $pdo) {
     ");
 }
 
+function normalizeExternalLinkUrl($url) {
+    $raw = trim((string) $url);
+    if ($raw === '') return '';
+    if (preg_match('#^[a-z][a-z0-9+.-]*:#i', $raw)) return $raw;
+    if ($raw[0] === '/' || $raw[0] === '#' || strpos($raw, './') === 0 || strpos($raw, '../') === 0) return $raw;
+    $hostPart = preg_split('~[/?#]~', $raw, 2)[0];
+    if (preg_match('/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/', $hostPart) || preg_match('/^localhost(:\d+)?$/i', $hostPart)) {
+        return 'https://' . $raw;
+    }
+    if (strpos($hostPart, '.') !== false) {
+        $suffix = strtolower(pathinfo($hostPart, PATHINFO_EXTENSION));
+        $fileExtensions = ['html', 'htm', 'php', 'asp', 'aspx', 'jsp', 'json', 'xml', 'txt', 'apk', 'zip', 'rar', '7z', 'js', 'css', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'];
+        if (!in_array($suffix, $fileExtensions, true)) return 'https://' . $raw;
+    }
+    return $raw;
+}
+
 function getAppLinkSettings(PDO $pdo) {
     ensureAppSettingsTable($pdo);
     $defaults = [
@@ -165,6 +182,9 @@ function getAppLinkSettings(PDO $pdo) {
     }
     if ($defaults['group_url'] === '' && $defaults['download_url'] !== '') {
         $defaults['group_url'] = $defaults['download_url'];
+    }
+    foreach (['trial_url', 'buy_card_url', 'download_url', 'group_url'] as $key) {
+        $defaults[$key] = normalizeExternalLinkUrl($defaults[$key]);
     }
     return $defaults;
 }
@@ -2982,6 +3002,7 @@ case 'app_settings':
         $stmt = $pdo->prepare('REPLACE INTO app_settings (setting_key, setting_value) VALUES (?, ?)');
         foreach ($allowed as $key) {
             $value = isset($input[$key]) ? trim((string) $input[$key]) : '';
+            $value = normalizeExternalLinkUrl($value);
             if (mb_strlen($value) > 1000) $value = mb_substr($value, 0, 1000);
             $stmt->execute([$key, $value]);
         }
@@ -3011,7 +3032,7 @@ case 'app_remote_config':
     if ($action === 'save') {
         $allowed = [
             'version_code', 'version_name', 'apk_url', 'apk_url_github', 'apk_url_gitee', 'update_title', 'update_message', 'force_update',
-            'popup_enabled', 'popup_title', 'popup_message', 'popup_url', 'group_url',
+            'popup_enabled', 'popup_title', 'popup_message', 'popup_url', 'buy_card_url', 'group_url',
             'app_login_required', 'app_login_enabled', 'app_login_username', 'app_login_password', 'app_login_title', 'app_login_message'
         ];
         $stmt = $pdo->prepare('REPLACE INTO app_settings (setting_key, setting_value) VALUES (?, ?)');
@@ -3019,6 +3040,7 @@ case 'app_remote_config':
             $value = isset($input[$key]) ? trim((string) $input[$key]) : '';
             if ($key === 'version_code') $value = (string) max(1, (int) $value);
             if ($key === 'force_update' || $key === 'popup_enabled' || $key === 'app_login_required') $value = ((int) $value) ? '1' : '0';
+            if (in_array($key, ['apk_url', 'apk_url_github', 'apk_url_gitee', 'popup_url', 'buy_card_url', 'group_url'], true)) $value = normalizeExternalLinkUrl($value);
             if (mb_strlen($value) > 2000) $value = mb_substr($value, 0, 2000);
             $stmt->execute([$key, $value]);
         }

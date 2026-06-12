@@ -1030,6 +1030,9 @@ try {
             <input type="text" id="appUpdateTitle" placeholder="更新标题" style="width:220px;">
             <input type="text" id="appUpdateMessage" placeholder="更新说明" style="width:420px;">
             <label class="form-label"><input type="checkbox" id="appForceUpdate"> 强制更新</label>
+            <input type="text" id="appBuyCardUrl" placeholder="购买卡密链接（APP 买卡按钮）" style="width:320px;">
+        </div>
+        <div class="filter-row">
             <input type="text" id="appGroupUrl" placeholder="入群链接" style="width:320px;">
         </div>
         <div class="filter-row">
@@ -2520,6 +2523,7 @@ try {
                     set('appApkUrlGitee', u.apk_url_gitee || '');
                     set('appUpdateTitle', u.title || '');
                     set('appUpdateMessage', u.message || '');
+                    set('appBuyCardUrl', links.buy_card_url || '');
                     set('appGroupUrl', links.group_url || links.download_url || '');
                     set('appLoginUsername', appLogin.username || '');
                     set('appLoginPassword', appLogin.password || '');
@@ -2554,6 +2558,7 @@ try {
                     apk_url_gitee: val('appApkUrlGitee'),
                     update_title: val('appUpdateTitle'),
                     update_message: val('appUpdateMessage'),
+                    buy_card_url: val('appBuyCardUrl'),
                     group_url: val('appGroupUrl'),
                     app_login_required: document.getElementById('appLoginRequired') && document.getElementById('appLoginRequired').checked ? 1 : 0,
                     app_login_enabled: document.getElementById('appLoginEnabled') && document.getElementById('appLoginEnabled').checked ? 1 : 0,

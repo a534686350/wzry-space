@@ -12,6 +12,7 @@ BRANCH="${REPO_BRANCH:-main}"
 SRC_DIR="${SRC_DIR:-/opt/wzry-space-src}"
 SITE_DIR="${SITE_DIR:-/www/wwwroot/wzry-space}"
 SERVER_NAME="${SERVER_NAME:-_}"
+SITE_PORT="${SITE_PORT:-85}"
 INSTALL_CODE="${WZRY_INSTALL_CODE:-}"
 DB_ROOT_USER="${DB_ROOT_USER:-root}"
 DB_ROOT_PASSWORD="${DB_ROOT_PASSWORD:-}"
@@ -51,6 +52,7 @@ usage() {
   --repo-url URL               自定义源码仓库地址
   --branch NAME                分支，默认 main
   --server-name NAME           域名；不绑定域名可填 _
+  --site-port PORT             网站访问端口，默认 85
   --site-dir DIR               网站目录，默认 /www/wwwroot/wzry-space
   --src-dir DIR                源码目录，默认 /opt/wzry-space-src
   --db-root-password PASS      MySQL root 密码；新服务器常可留空
@@ -91,6 +93,8 @@ while [[ $# -gt 0 ]]; do
         --site-dir=*) SITE_DIR="${1#*=}"; shift ;;
         --server-name) SERVER_NAME="${2:-}"; shift 2 ;;
         --server-name=*) SERVER_NAME="${1#*=}"; shift ;;
+        --site-port) SITE_PORT="${2:-}"; shift 2 ;;
+        --site-port=*) SITE_PORT="${1#*=}"; shift ;;
         --db-root-password) DB_ROOT_PASSWORD="${2:-}"; shift 2 ;;
         --db-root-password=*) DB_ROOT_PASSWORD="${1#*=}"; shift ;;
         --db-name) DB_NAME="${2:-}"; shift 2 ;;
@@ -249,6 +253,7 @@ collect_inputs() {
     prompt_text BRANCH "请输入源码分支" "$BRANCH" 0
     prompt_text SRC_DIR "请输入源码保存目录" "$SRC_DIR" 0
     prompt_text SITE_DIR "请输入网站部署目录" "$SITE_DIR" 0
+    prompt_text SITE_PORT "请输入网站访问端口" "$SITE_PORT" 0
 
     if [[ "$SERVER_NAME" == "_" || -z "$SERVER_NAME" ]]; then
         if ask_yes_no "是否需要添加域名" "n"; then
@@ -286,6 +291,9 @@ collect_inputs() {
 
     validate_identifier "数据库名" "$DB_NAME"
     validate_identifier "数据库用户名" "$DB_USER"
+    [[ "$SITE_PORT" =~ ^[0-9]+$ ]] || die "网站端口必须是数字：$SITE_PORT"
+    (( SITE_PORT >= 1 && SITE_PORT <= 65535 )) || die "网站端口范围必须是 1-65535：$SITE_PORT"
+    [[ "$SITE_PORT" != "8888" && "$SITE_PORT" != "9999" ]] || die "网站端口不能使用 8888 或 9999"
 
     blue ""
     blue "即将开始部署："
@@ -293,6 +301,7 @@ collect_inputs() {
     printf '  分支：%s\n' "$BRANCH"
     printf '  源码目录：%s\n' "$SRC_DIR"
     printf '  网站目录：%s\n' "$SITE_DIR"
+    printf '  网站端口：%s\n' "$SITE_PORT"
     printf '  域名：%s\n' "$SERVER_NAME"
     printf '  数据库：%s / %s\n' "$DB_NAME" "$DB_USER"
     printf '  后台用户名：%s\n' "$ADMIN_USER"
@@ -307,8 +316,13 @@ install_packages() {
     green "正在安装基础环境：Nginx、PHP、MariaDB、Java、Git、端口工具"
     if command -v apt-get >/dev/null 2>&1; then
         export DEBIAN_FRONTEND=noninteractive
+        export APT_LISTCHANGES_FRONTEND=none
+        export NEEDRESTART_MODE=a
         apt-get update
-        apt-get install -y \
+        apt-get \
+            -o Dpkg::Options::=--force-confdef \
+            -o Dpkg::Options::=--force-confold \
+            install -y \
             git curl rsync unzip sudo openssl ca-certificates cron \
             nginx mariadb-server mariadb-client \
             php-cli php-fpm php-mysql php-curl php-mbstring php-xml \
@@ -687,7 +701,7 @@ write_nginx_configs() {
 
     cat > "$site_conf" <<NGINX
 server {
-    listen 80;
+    listen $SITE_PORT;
     server_name $SERVER_NAME 127.0.0.1 localhost;
 
     root $SITE_DIR;
@@ -829,11 +843,11 @@ open_port_ufw() {
 }
 
 configure_firewall() {
-    green "正在开放 SSH 服务器系统端口：80、8888、9999"
+    green "正在开放 SSH 服务器系统端口：${SITE_PORT}、8888、9999"
 
     if command -v ufw >/dev/null 2>&1; then
         open_port_ufw 22
-        open_port_ufw 80
+        open_port_ufw "$SITE_PORT"
         open_port_ufw 8888
         open_port_ufw 9999
         if ufw status 2>/dev/null | grep -qi "Status: active"; then
@@ -844,7 +858,7 @@ configure_firewall() {
     fi
 
     if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
-        firewall-cmd --permanent --add-port=80/tcp >/dev/null 2>&1 || true
+        firewall-cmd --permanent --add-port="${SITE_PORT}/tcp" >/dev/null 2>&1 || true
         firewall-cmd --permanent --add-port=8888/tcp >/dev/null 2>&1 || true
         firewall-cmd --permanent --add-port=9999/tcp >/dev/null 2>&1 || true
         firewall-cmd --reload >/dev/null 2>&1 || true
@@ -854,13 +868,25 @@ configure_firewall() {
     fi
 
     if command -v iptables >/dev/null 2>&1; then
-        iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+        iptables -C INPUT -p tcp --dport "$SITE_PORT" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$SITE_PORT" -j ACCEPT
+        iptables -C INPUT -p tcp --dport 8888 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 8888 -j ACCEPT
+        iptables -C INPUT -p tcp --dport 9999 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 9999 -j ACCEPT
+        if command -v ip6tables >/dev/null 2>&1; then
+            ip6tables -C INPUT -p tcp --dport "$SITE_PORT" -j ACCEPT 2>/dev/null || ip6tables -I INPUT -p tcp --dport "$SITE_PORT" -j ACCEPT
+            ip6tables -C INPUT -p tcp --dport 8888 -j ACCEPT 2>/dev/null || ip6tables -I INPUT -p tcp --dport 8888 -j ACCEPT
+            ip6tables -C INPUT -p tcp --dport 9999 -j ACCEPT 2>/dev/null || ip6tables -I INPUT -p tcp --dport 9999 -j ACCEPT
+        fi
+        if command -v nft >/dev/null 2>&1; then
+            nft add rule inet filter input tcp dport "$SITE_PORT" accept 2>/dev/null || true
+            nft add rule inet filter input tcp dport 8888 accept 2>/dev/null || true
+            nft add rule inet filter input tcp dport 9999 accept 2>/dev/null || true
+        fi
         iptables -C INPUT -p tcp --dport 18888 ! -s 127.0.0.1 -j DROP 2>/dev/null || iptables -I INPUT -p tcp --dport 18888 ! -s 127.0.0.1 -j DROP
         iptables -C INPUT -p tcp --dport 19999 ! -s 127.0.0.1 -j DROP 2>/dev/null || iptables -I INPUT -p tcp --dport 19999 ! -s 127.0.0.1 -j DROP
     fi
 
-    green "端口处理完成：80/8888/9999 已尝试开放，18888/19999 已限制为本机内部端口"
-    yellow "如果云厂商安全组仍拦截，请在云厂商控制台放行 80、8888、9999。服务器内防火墙已在 SSH 中处理。"
+    green "端口处理完成：${SITE_PORT}/8888/9999 已尝试开放，18888/19999 已限制为本机内部端口"
+    yellow "如果云厂商安全组仍拦截，请在云厂商控制台放行 ${SITE_PORT}、8888、9999。服务器内防火墙已在 SSH 中处理。"
 }
 
 write_install_receipt() {
@@ -870,6 +896,7 @@ SOURCE=$SOURCE
 BRANCH=$BRANCH
 SRC_DIR=$SRC_DIR
 SITE_DIR=$SITE_DIR
+SITE_PORT=$SITE_PORT
 SERVER_NAME=$SERVER_NAME
 DB_NAME=$DB_NAME
 DB_USER=$DB_USER
@@ -895,6 +922,16 @@ server_host() {
     fi
 }
 
+site_base_url() {
+    local host port_suffix
+    host="$(server_host)"
+    port_suffix=""
+    if [[ "$SITE_PORT" != "80" ]]; then
+        port_suffix=":$SITE_PORT"
+    fi
+    printf 'http://%s%s\n' "$host" "$port_suffix"
+}
+
 latest_apk_name() {
     find "$SITE_DIR/apk" -maxdepth 1 -type f -name 'ALinRadar-v*.apk' -printf '%f\n' 2>/dev/null | sort -V | tail -n 1
 }
@@ -910,15 +947,15 @@ verify_install() {
 }
 
 print_summary() {
-    local host app_file
-    host="$(server_host)"
+    local base_url app_file
+    base_url="$(site_base_url)"
     app_file="$(latest_apk_name)"
 
     green "========================================"
     green "  全部搭建成功"
     green "========================================"
-    printf '你的前台地址是：    http://%s/\n' "$host"
-    printf '你的后台地址是：    http://%s/admin/\n' "$host"
+    printf '你的前台地址是：    %s/\n' "$base_url"
+    printf '你的后台地址是：    %s/admin/\n' "$base_url"
     printf '后台用户名是：      %s\n' "$ADMIN_USER"
     if [[ "$ADMIN_CREATED" == "1" ]]; then
         printf '后台密码是：        %s\n' "$ADMIN_PASSWORD"
@@ -933,7 +970,7 @@ print_summary() {
         printf '数据库密码是：      已保留原有配置\n'
     fi
     if [[ -n "$app_file" ]]; then
-        printf 'APP 下载路径是：    http://%s/apk/%s\n' "$host" "$app_file"
+        printf 'APP 下载路径是：    %s/apk/%s\n' "$base_url" "$app_file"
     else
         printf 'APP 下载路径是：    未发现 APK，请检查 %s/apk/\n' "$SITE_DIR"
     fi

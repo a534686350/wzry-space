@@ -30,8 +30,11 @@ echo -e "${GREEN}>>> 项目目录: $PROJECT_DIR${NC}"
 install_deps() {
     if command -v apt-get &>/dev/null; then
         echo -e "${YELLOW}>>> 检测到 Debian/Ubuntu，安装 nginx + PHP ...${NC}"
+        export DEBIAN_FRONTEND=noninteractive
+        export APT_LISTCHANGES_FRONTEND=none
+        export NEEDRESTART_MODE=a
         apt-get update -qq
-        apt-get install -y -qq nginx php-fpm php-mysql php-curl php-json php-mbstring php-xml unzip 2>/dev/null || true
+        apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y -qq nginx php-fpm php-mysql php-curl php-json php-mbstring php-xml unzip 2>/dev/null || true
         PHP_SOCK="/run/php/php-fpm.sock"
         [[ -S /run/php/php8.1-fpm.sock ]] && PHP_SOCK="/run/php/php8.1-fpm.sock"
         [[ -S /run/php/php8.2-fpm.sock ]] && PHP_SOCK="/run/php/php8.2-fpm.sock"

@@ -9,6 +9,78 @@ if (hasReleaseKeystore) {
     keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
 }
 
+def radarAppApiBase = (project.findProperty("APP_API_BASE") ?: "http://你的域名或新服务器IP").toString()
+def radarAppServerHost = (project.findProperty("APP_SERVER_HOST") ?: "你的域名或新服务器IP").toString()
+def radarAppServerPort = (project.findProperty("APP_SERVER_PORT") ?: "8888").toString()
+def radarAppFixed = (project.findProperty("APP_FIXED") ?: "false").toString().equalsIgnoreCase("true")
+def radarAppLoginMode = (project.findProperty("APP_LOGIN_MODE") ?: "auto").toString()
+def radarAppName = (project.findProperty("APP_NAME") ?: "ALin雷达").toString()
+def radarAppIconFile = (project.findProperty("APP_ICON_FILE") ?: "").toString().trim()
+def radarAppBuyUrl = (project.findProperty("APP_BUY_URL") ?: "").toString().trim()
+def radarConfigAssetsDir = layout.buildDirectory.dir("generated/radarConfig/assets")
+def radarBrandingResDir = layout.buildDirectory.dir("generated/radarBranding/res")
+def radarAppIconSource = radarAppIconFile.length() > 0 ? file(radarAppIconFile) : null
+def radarHasCustomIcon = radarAppIconSource != null && radarAppIconSource.exists()
+
+def generateRadarBranding = tasks.register("generateRadarBranding") {
+    def outputDir = radarBrandingResDir
+    outputs.dir(outputDir)
+    inputs.property("appName", radarAppName)
+    inputs.property("iconFile", radarAppIconFile)
+    if (radarHasCustomIcon) inputs.file(radarAppIconSource)
+    doLast {
+        def resDir = outputDir.get().asFile
+        if (!radarHasCustomIcon) return
+        def sourceImage = javax.imageio.ImageIO.read(radarAppIconSource)
+        if (sourceImage == null) throw new GradleException("无法读取 APP 图标图片: ${radarAppIconSource}")
+        [
+            "mipmap-mdpi": 48,
+            "mipmap-hdpi": 72,
+            "mipmap-xhdpi": 96,
+            "mipmap-xxhdpi": 144,
+            "mipmap-xxxhdpi": 192
+        ].each { dirName, size ->
+            def iconDir = new File(resDir, dirName)
+            iconDir.mkdirs()
+            ["ic_launcher.png", "ic_launcher_round.png"].each { fileName ->
+                def outputImage = new java.awt.image.BufferedImage(size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+                def graphics = outputImage.createGraphics()
+                graphics.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC)
+                graphics.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING, java.awt.RenderingHints.VALUE_RENDER_QUALITY)
+                graphics.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
+                graphics.drawImage(sourceImage, 0, 0, size, size, null)
+                graphics.dispose()
+                javax.imageio.ImageIO.write(outputImage, "png", new File(iconDir, fileName))
+            }
+        }
+    }
+}
+
+def generateRadarAppConfig = tasks.register("generateRadarAppConfig") {
+    def outputFile = radarConfigAssetsDir.map { it.file("radar-app-config.json") }
+    outputs.file(outputFile)
+    inputs.property("apiBase", radarAppApiBase)
+    inputs.property("serverHost", radarAppServerHost)
+    inputs.property("serverPort", radarAppServerPort)
+    inputs.property("fixed", radarAppFixed)
+    inputs.property("loginMode", radarAppLoginMode)
+    inputs.property("appName", radarAppName)
+    inputs.property("buyUrl", radarAppBuyUrl)
+    doLast {
+        def file = outputFile.get().asFile
+        file.parentFile.mkdirs()
+        file.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
+            apiBase: radarAppApiBase,
+            serverHost: radarAppServerHost,
+            serverPort: radarAppServerPort,
+            fixed: radarAppFixed,
+            loginMode: radarAppLoginMode,
+            appName: radarAppName,
+            buyUrl: radarAppBuyUrl
+        ]))
+    }
+}
+
 android {
     namespace "com.qy.wzryoverlay"
     compileSdk 35
@@ -30,6 +102,16 @@ android {
         targetSdk 35
         versionCode 11
         versionName "v6.1.11"
+        manifestPlaceholders = [
+            appLabel: radarAppName,
+            appIcon: radarHasCustomIcon ? "@mipmap/ic_launcher" : "@drawable/ic_radar",
+            appRoundIcon: radarHasCustomIcon ? "@mipmap/ic_launcher_round" : "@drawable/ic_radar"
+        ]
+    }
+
+    sourceSets {
+        main.assets.srcDir(radarConfigAssetsDir)
+        main.res.srcDir(radarBrandingResDir)
     }
 
     buildTypes {
@@ -49,6 +131,32 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    dependsOn(generateRadarAppConfig)
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Resources") }.configureEach {
+    dependsOn(generateRadarBranding)
+}
+
+tasks.matching { it.name.startsWith("generate") && it.name.endsWith("Resources") }.configureEach {
+    dependsOn(generateRadarBranding)
+}
+
+tasks.matching { it.name.startsWith("map") && it.name.endsWith("SourceSetPaths") }.configureEach {
+    dependsOn(generateRadarBranding)
+}
+
+tasks.matching { it.name.startsWith("extractDeepLinks") }.configureEach {
+    dependsOn(generateRadarBranding)
+}
+
+tasks.configureEach {
+    if (name != "generateRadarBranding" && name.toLowerCase().contains("release")) {
+        dependsOn(generateRadarBranding)
     }
 }
 

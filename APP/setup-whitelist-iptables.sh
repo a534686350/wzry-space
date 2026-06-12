@@ -14,7 +14,11 @@ HELPER_DST="/usr/local/bin/ws-whitelist-helper.sh"
 
 echo -e "${GREEN}=== 1. 安装 ipset ===${NC}"
 if command -v apt-get &>/dev/null; then
-    apt-get install -y ipset iptables-persistent 2>/dev/null || apt-get install -y ipset || true
+    export DEBIAN_FRONTEND=noninteractive
+    export APT_LISTCHANGES_FRONTEND=none
+    export NEEDRESTART_MODE=a
+    apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y ipset iptables-persistent 2>/dev/null || \
+        apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y ipset || true
 elif command -v yum &>/dev/null; then
     yum install -y ipset ipset-service 2>/dev/null || true
 fi

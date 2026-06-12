@@ -26,6 +26,10 @@ import java.util.List;
 import java.util.Map;
 
 public class RadarView extends View {
+    private static final int MAX_STABLE_HEROES = 5;
+    private static final int HERO_DROP_AFTER_MISSING_FRAMES = 6;
+    private static final int[] MONSTER_READY_CD_VALUES = {0, 60, 70, 90, 120, 240};
+
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private HeroIconCache iconCache;
@@ -57,9 +61,10 @@ public class RadarView extends View {
     private boolean showHeroes = true;
     private boolean showMinions = true;
     private boolean showMonsters = true;
-    private boolean showZeroSkillCd = true;
+    private boolean showZeroSkillCd = false;
     private final Map<String, String> heroNames = new HashMap<>();
     private final Map<String, RadarData.Hero> lastHeroes = new HashMap<>();
+    private final Map<String, Integer> heroMissingFrames = new HashMap<>();
     private final List<String> heroOrder = new ArrayList<>();
 
     public RadarView(Context context) {
@@ -84,6 +89,7 @@ public class RadarView extends View {
 
     public void clearHeroCache() {
         lastHeroes.clear();
+        heroMissingFrames.clear();
         heroOrder.clear();
         data = new RadarData();
         invalidate();
@@ -101,29 +107,88 @@ public class RadarView extends View {
 
     private RadarData mergeStableHeroes(RadarData next) {
         Map<String, RadarData.Hero> incoming = new HashMap<>();
+        List<String> incomingOrder = new ArrayList<>();
+        List<String> previousOrder = new ArrayList<>(heroOrder);
         for (RadarData.Hero hero : next.heroes) {
             if (hero.id == null || hero.id.length() == 0) continue;
-            hero.dead = hero.hp <= 0;
+            RadarData.Hero last = lastHeroes.get(hero.id);
+            if (!hasUsablePosition(hero)) {
+                if (last == null || !hasUsablePosition(last)) continue;
+                hero.x = last.x;
+                hero.y = last.y;
+            }
+            hero.stale = false;
+            if (hero.dead || hero.hp <= 0) {
+                incomingOrder.add(hero.id);
+                lastHeroes.remove(hero.id);
+                heroMissingFrames.remove(hero.id);
+                heroOrder.remove(hero.id);
+                continue;
+            }
             incoming.put(hero.id, hero);
+            incomingOrder.add(hero.id);
             lastHeroes.put(hero.id, copyHero(hero));
+            heroMissingFrames.put(hero.id, 0);
             if (!heroOrder.contains(hero.id)) heroOrder.add(hero.id);
         }
+        if (incoming.size() >= MAX_STABLE_HEROES && !hasAnyActiveHero(incoming, previousOrder)) {
+            heroOrder.clear();
+            lastHeroes.clear();
+            heroMissingFrames.clear();
+            for (String id : incomingOrder) {
+                RadarData.Hero hero = incoming.get(id);
+                if (hero == null) continue;
+                lastHeroes.put(id, copyHero(hero));
+                heroMissingFrames.put(id, 0);
+                heroOrder.add(id);
+                if (heroOrder.size() >= MAX_STABLE_HEROES) break;
+            }
+        }
         next.heroes.clear();
-        for (String id : new ArrayList<>(heroOrder)) {
+        List<String> ordered = new ArrayList<>();
+        for (String id : heroOrder) {
+            if (!ordered.contains(id)) ordered.add(id);
+        }
+        for (String id : incomingOrder) {
+            if (!ordered.contains(id)) ordered.add(id);
+        }
+        heroOrder.clear();
+        for (String id : ordered) {
             RadarData.Hero hero = incoming.get(id);
             if (hero == null) {
                 RadarData.Hero last = lastHeroes.get(id);
                 if (last == null) continue;
+                int missing = heroMissingFrames.containsKey(id) ? heroMissingFrames.get(id) + 1 : 1;
+                if (missing > HERO_DROP_AFTER_MISSING_FRAMES) {
+                    lastHeroes.remove(id);
+                    heroMissingFrames.remove(id);
+                    continue;
+                }
+                heroMissingFrames.put(id, missing);
                 hero = copyHero(last);
-                hero.dead = true;
-                hero.hp = 0;
-                hero.ultCd = 0;
-                hero.skillCd = 0;
-                hero.summonerCd = 0;
+                hero.stale = true;
+            }
+            if (hero.dead || hero.hp <= 0) {
+                lastHeroes.remove(id);
+                heroMissingFrames.remove(id);
+                continue;
             }
             next.heroes.add(hero);
+            heroOrder.add(id);
+            if (next.heroes.size() >= MAX_STABLE_HEROES) break;
         }
         return next;
+    }
+
+    private boolean hasAnyActiveHero(Map<String, RadarData.Hero> incoming, List<String> order) {
+        for (String id : order) {
+            if (incoming.containsKey(id)) return true;
+        }
+        return false;
+    }
+
+    private boolean hasUsablePosition(RadarData.Hero hero) {
+        return hero != null && !Float.isNaN(hero.x) && !Float.isNaN(hero.y) && hero.x >= 0 && hero.y >= 0;
     }
 
     private RadarData.Hero copyHero(RadarData.Hero source) {
@@ -134,11 +199,13 @@ public class RadarView extends View {
         hero.skillCd = source.skillCd;
         hero.summonerCd = source.summonerCd;
         hero.summonerSkillId = source.summonerSkillId;
+        hero.deathCd = source.deathCd;
         hero.x = source.x;
         hero.y = source.y;
         hero.hp = source.hp;
         hero.team = source.team;
         hero.dead = source.dead;
+        hero.stale = source.stale;
         return hero;
     }
 
@@ -319,7 +386,7 @@ public class RadarView extends View {
 
     private void drawHeroes(Canvas canvas, RectF map) {
         for (RadarData.Hero hero : data.heroes) {
-            if (hero.dead) continue;
+            if (hero.dead || hero.hp <= 0) continue;
             float x = coordX(map, hero.x + heroOffsetX);
             float y = coordY(map, hero.y + heroOffsetY);
             int fill = hero.team == 1 ? 0xff38bdf8 : 0xfffb7185;
@@ -365,15 +432,34 @@ public class RadarView extends View {
         float cx = left + width / 2f;
         float cy = top + height * 0.42f;
         float box = dp(20) * s;
-        float ultSize = dp(11) * s;
+        float ultBox = dp(20) * s;
+        float ultTop = cy - avatarR - ultBox - dp(4) * s;
+        RectF ultRect = new RectF(cx - ultBox / 2f, ultTop, cx + ultBox / 2f, ultTop + ultBox);
+        Bitmap ultIcon = iconCache != null ? iconCache.getUlt(hero.id, this::invalidate) : null;
+        if (ultIcon != null) {
+            drawRoundBitmap(canvas, ultIcon, ultRect, dp(3) * s);
+        } else {
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(hero.dead ? 0x66475569 : 0x992563eb);
+            canvas.drawRoundRect(ultRect, dp(3) * s, dp(3) * s, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(1));
+            paint.setColor(0x99ffffff);
+            canvas.drawRoundRect(ultRect, dp(3) * s, dp(3) * s, paint);
+        }
+        if (hero.dead) {
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0x99020617);
+            canvas.drawRoundRect(ultRect, dp(3) * s, dp(3) * s, paint);
+        }
         textPaint.setTextAlign(Paint.Align.CENTER);
         textPaint.setFakeBoldText(true);
-        textPaint.setColor(0xffffffff);
-        textPaint.setTextSize(ultSize);
+        textPaint.setColor(hero.dead ? 0x99ffffff : 0xffffffff);
+        textPaint.setTextSize(Math.max(dp(8) * s, ultBox * 0.5f));
         textPaint.setShadowLayer(dp(2) * s, 0, 0, 0xcc000000);
-        if (showZeroSkillCd || hero.ultCd > 0) {
+        if (shouldDrawSkillCountdown(hero.ultCd)) {
             String ultText = String.valueOf(Math.max(0, Math.min(999, hero.ultCd)));
-            canvas.drawText(ultText, cx, cy - avatarR - dp(3) * s, textPaint);
+            canvas.drawText(ultText, ultRect.centerX(), ultRect.centerY() + textPaint.getTextSize() * 0.35f, textPaint);
         }
         textPaint.clearShadowLayer();
         Bitmap icon = iconCache != null ? iconCache.get(hero.id, this::invalidate) : null;
@@ -381,12 +467,24 @@ public class RadarView extends View {
             drawCircularBitmap(canvas, icon, cx, cy, avatarR);
         } else {
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(hero.team == 1 ? 0xff38bdf8 : 0xfffb7185);
+            paint.setColor(hero.dead ? 0xff64748b : (hero.team == 1 ? 0xff38bdf8 : 0xfffb7185));
+            canvas.drawCircle(cx, cy, avatarR, paint);
+        }
+        if (hero.dead) {
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0xaa020617);
+            canvas.drawCircle(cx, cy, avatarR, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(1) * s);
+            paint.setColor(0xff94a3b8);
             canvas.drawCircle(cx, cy, avatarR, paint);
         }
         float sumTop = cy + avatarR + dp(3) * s;
         RectF r = new RectF(cx - box / 2f, sumTop, cx + box / 2f, sumTop + box);
         Bitmap summoner = iconCache != null ? iconCache.getSummoner(hero.summonerSkillId, this::invalidate) : null;
+        if (summoner == null && iconCache != null && hero.summonerCd >= 0) {
+            summoner = iconCache.getSummonerPlaceholder();
+        }
         if (summoner != null) {
             drawRoundBitmap(canvas, summoner, r, dp(3) * s);
         } else {
@@ -395,13 +493,22 @@ public class RadarView extends View {
             paint.setColor(0x99ffffff);
             canvas.drawRoundRect(r, dp(3) * s, dp(3) * s, paint);
         }
+        if (hero.dead) {
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0x99020617);
+            canvas.drawRoundRect(r, dp(3) * s, dp(3) * s, paint);
+        }
         textPaint.setTextSize(Math.max(dp(8) * s, box * 0.5f));
         textPaint.setShadowLayer(dp(2) * s, 0, 0, 0xcc000000);
-        if (showZeroSkillCd || hero.summonerCd > 0) {
+        if (shouldDrawSkillCountdown(hero.summonerCd)) {
             String cdText = String.valueOf(Math.max(0, Math.min(999, hero.summonerCd)));
             canvas.drawText(cdText, r.centerX(), r.centerY() + textPaint.getTextSize() * 0.35f, textPaint);
         }
         textPaint.clearShadowLayer();
+    }
+
+    private boolean shouldDrawSkillCountdown(int cd) {
+        return cd > 0 || (showZeroSkillCd && cd == 0);
     }
 
     private void drawMinions(Canvas canvas, RectF map) {
@@ -437,13 +544,26 @@ public class RadarView extends View {
 
     private void drawMonsters(Canvas canvas, RectF map) {
         textPaint.setTextSize(dp(9));
+        int cd1660221 = -1;
+        int cd166009 = -1;
+        int cd166022 = -1;
+        for (RadarData.Monster monster : data.monsters) {
+            if ("1660221".equals(monster.id)) {
+                cd1660221 = monster.cd;
+            } else if ("166009".equals(monster.id)) {
+                cd166009 = monster.cd;
+            } else if ("166022".equals(monster.id)) {
+                cd166022 = monster.cd;
+            }
+        }
+
         for (RadarData.Monster monster : data.monsters) {
             float x = coordX(map, monster.x + monsterOffsetX);
             float y = coordY(map, monster.y + monsterOffsetY);
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(0xfffacc15);
             canvas.drawCircle(x, y, clamp(map.width() * 0.012f, dp(2.2f), dp(4f)) * monsterScale, paint);
-            if (monster.cd > 0 && monster.cd <= 240) {
+            if (shouldDrawMonsterCountdown(monster, cd1660221, cd166009, cd166022)) {
                 textPaint.setColor(0xffffffff);
                 Paint.Align prev = textPaint.getTextAlign();
                 textPaint.setTextAlign(Paint.Align.CENTER);
@@ -451,6 +571,38 @@ public class RadarView extends View {
                 textPaint.setTextAlign(prev);
             }
         }
+    }
+
+    private boolean shouldDrawMonsterCountdown(RadarData.Monster monster, int cd1660221, int cd166009, int cd166022) {
+        int cd = monster.cd;
+        if (cd <= 0 || cd > 240) return false;
+        if (isMonsterReadyCd(cd)) return false;
+        if (shouldHideMonsterCountdown(monster.id, cd1660221, cd166009, cd166022)) return false;
+        return true;
+    }
+
+    private boolean shouldHideMonsterCountdown(String id, int cd1660221, int cd166009, int cd166022) {
+        if (hasActiveMonsterCd(cd1660221, 180)) {
+            if ("166009".equals(id) || "166018".equals(id) || "166012".equals(id) || "166022".equals(id)) {
+                return true;
+            }
+        } else if (hasActiveMonsterCd(cd166009, 210)) {
+            if ("166018".equals(id)) {
+                return true;
+            }
+        }
+        return hasActiveMonsterCd(cd166022, 210) && "166012".equals(id);
+    }
+
+    private boolean isMonsterReadyCd(int cd) {
+        for (int readyCd : MONSTER_READY_CD_VALUES) {
+            if (readyCd == cd) return true;
+        }
+        return false;
+    }
+
+    private boolean hasActiveMonsterCd(int cd, int max) {
+        return cd > 0 && cd <= max;
     }
 
     private void drawFooter(Canvas canvas, RectF map) {

@@ -11,9 +11,9 @@
  *    5. 创建站点目录 /www/wwwroot/<host>/
  *    6. SFTP 上传源码
  *    7. 改写 .user.ini 中的 open_basedir
- *    8. 写入 Nginx 站点配置（监听 80）并 reload
- *    9. 写入 systemd 服务并启动 Java jar（监听 8888）
- *   10. 放行防火墙 80 / 8888
+ *    8. 写入 Nginx 站点配置（默认监听 85）并 reload
+ *    9. 写入 systemd 服务并启动 Java jar（监听 8888 / 9999）
+ *   10. 放行防火墙 85 / 8888 / 9999
  *   11. 健康检查
  */
 
@@ -21,6 +21,10 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { Client } = require('ssh2');
+
+const APT_GET_NONINTERACTIVE =
+  'DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a ' +
+  'apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold';
 
 const STEPS = [
   { id: 'connect', label: '连接 SSH' },
@@ -60,6 +64,7 @@ async function runDeployment({ creds, payloadDir, emit, shouldCancel }) {
   };
 
   try {
+    validatePayloadDir(ctx);
     // 0. 预清理：先干掉旧 Java 进程和 8888 端口占用，防止 systemd 自动重启抢端口
     await stepConnect(ctx);
     if (shouldCancel()) throw new Error('已取消');
@@ -116,6 +121,37 @@ async function runDeployment({ creds, payloadDir, emit, shouldCancel }) {
   } finally {
     try { conn.end(); } catch (_) {}
   }
+}
+
+function validatePayloadDir(ctx) {
+  const { payloadDir, creds, emit } = ctx;
+  const indexPath = path.join(payloadDir, 'index.html');
+  if (!fs.existsSync(indexPath)) {
+    throw new Error(`payload 缺少 index.html: ${indexPath}`);
+  }
+
+  const html = fs.readFileSync(indexPath, 'utf8');
+  const mode = creds.deployMode === 'card' ? 'card' : 'clean';
+  const forbidden = [
+    'manualRoomInput',
+    'btnManualRoomConnect',
+    'btnAddQQGroup',
+    'copyGroupNumber',
+    '加入QQ群',
+    '连接房间</h3>',
+  ];
+  const hit = forbidden.find((item) => html.includes(item));
+  if (hit) {
+    throw new Error(`payload 仍是旧页面，发现残留: ${hit}。请重启一键部署后台后再部署。`);
+  }
+  if (!html.includes(`RADAR_LOGIN_MODE = window.RADAR_LOGIN_MODE || '${mode}'`)) {
+    throw new Error(`payload 登录模式不正确，当前部署版本需要 ${mode}`);
+  }
+  if (!html.includes('RADAR_WS_SAME_ORIGIN = true')) {
+    throw new Error('payload 缺少 RADAR_WS_SAME_ORIGIN=true，新页面必须通过站点同端口 /ws 获取房间列表');
+  }
+
+  emit.log('info', `payload 校验通过: ${indexPath} (${Buffer.byteLength(html)} bytes)`);
 }
 
 // ---------------------------------------------------------------------------
@@ -301,8 +337,8 @@ async function stepInstallJava(ctx) {
   // 2a. 优先：通过包管理器安装 JDK 8（最快最稳，国内源秒级完成）
   emit.log('info', '通过包管理器安装 JDK 8...');
   if (ctx.pkgMgr === 'apt') {
-    await execSudo(ctx, 'DEBIAN_FRONTEND=noninteractive apt-get update -qq', { allowFail: true, silent: true });
-    await execSudo(ctx, 'DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-8-jdk-headless', { allowFail: true });
+    await execSudo(ctx, `${APT_GET_NONINTERACTIVE} update -qq`, { allowFail: true, silent: true });
+    await execSudo(ctx, `${APT_GET_NONINTERACTIVE} install -y openjdk-8-jdk-headless`, { allowFail: true });
   } else {
     // CentOS/RHEL: 先确保仓库可用
     await ensureRhelPackageRepos(ctx, 'java-1.8.0-openjdk-devel');
@@ -354,7 +390,7 @@ async function stepInstallJava(ctx) {
   if (!hasWget && !hasCurl) {
     emit.log('info', '安装 wget 下载工具...');
     if (ctx.pkgMgr === 'apt') {
-      await execSudo(ctx, 'DEBIAN_FRONTEND=noninteractive apt-get install -y wget');
+      await execSudo(ctx, `${APT_GET_NONINTERACTIVE} install -y wget`);
     } else {
       await ensureRhelPackageRepos(ctx, 'wget');
       await execSudo(ctx, `${ctx.pkgMgr} install -y wget`);
@@ -435,7 +471,7 @@ async function stepInstallNginx(ctx) {
   } else {
     emit.log('info', '未检测到 Nginx，开始安装 ...');
     if (ctx.pkgMgr === 'apt') {
-      await execSudo(ctx, 'DEBIAN_FRONTEND=noninteractive apt-get install -y nginx');
+      await execSudo(ctx, `${APT_GET_NONINTERACTIVE} install -y nginx`);
     } else {
       await ensureRhelPackageRepos(ctx, 'Nginx');
       // CentOS/RHEL
@@ -465,8 +501,8 @@ async function stepInstallPhp(ctx) {
   } else {
     emit.log('info', '卡密版需要 PHP-FPM，开始安装 php-fpm php-cli...');
     if (ctx.pkgMgr === 'apt') {
-      await execSudo(ctx, 'DEBIAN_FRONTEND=noninteractive apt-get update -qq', { allowFail: true, silent: true });
-      await execSudo(ctx, 'DEBIAN_FRONTEND=noninteractive apt-get install -y php-fpm php-cli');
+      await execSudo(ctx, `${APT_GET_NONINTERACTIVE} update -qq`, { allowFail: true, silent: true });
+      await execSudo(ctx, `${APT_GET_NONINTERACTIVE} install -y php-fpm php-cli`);
     } else {
       await ensureRhelPackageRepos(ctx, 'php-fpm');
       await execSudo(ctx, `${ctx.pkgMgr} install -y php-fpm php-cli`);
@@ -510,7 +546,7 @@ async function stepUpload(ctx) {
 
   // 如果非 root，需要先把目录的所有者改为当前用户，SFTP 才能写
   if (ctx.sudo) {
-    await execSudo(ctx, `chown -R ${ctx.creds.username} ${siteRoot} /www/server/radar-java`, { allowFail: true });
+    await execSudo(ctx, `chown -R ${shQuote(ctx.creds.username)} ${shQuote(siteRoot)} /www/server/radar-java`, { allowFail: true });
   }
 
   const sftp = await new Promise((resolve, reject) => {
@@ -562,11 +598,11 @@ async function stepUpload(ctx) {
 
   // 改回所有者 + 改写 .user.ini
   if (ctx.sudo) {
-    await execSudo(ctx, `chown -R root:root ${siteRoot} /www/server/radar-java`, { allowFail: true });
+    await execSudo(ctx, `chown -R root:root ${shQuote(siteRoot)} /www/server/radar-java`, { allowFail: true });
   }
   const userIni = `${siteRoot}/.user.ini`;
   const newLine = `open_basedir=${siteRoot}/:/tmp/`;
-  await execSudo(ctx, `echo '${shEscape(newLine)}' > '${userIni}'`, { allowFail: true });
+  await execSudo(ctx, `printf '%s\n' ${shQuote(newLine)} > ${shQuote(userIni)}`, { allowFail: true });
   emit.log('info', `已更新 ${userIni}`);
 
   if (creds.deployMode === 'card') {
@@ -579,20 +615,18 @@ async function stepUpload(ctx) {
 
 async function stepNginxConfig(ctx) {
   const { emit, siteRoot, hostLabel, creds } = ctx;
-  const sitePort = creds.sitePort || 80;
+  const sitePort = creds.sitePort || 85;
   emit.step('nginx-config', 'running', `写入 Nginx 站点配置 (${sitePort})`);
 
-  const btNginx = await execSudo(
-    ctx,
-    'test -d /www/server/panel/vhost/nginx -a -x /www/server/nginx/sbin/nginx && echo bt || true',
-    { allowFail: true, silent: true }
-  );
-  const isBtNginx = /\bbt\b/.test(btNginx.stdout || '');
+  const nginxRuntime = await detectNginxRuntime(ctx);
+  const isBtNginx = nginxRuntime.flavor === 'bt';
 
   if (isBtNginx) {
-    emit.log('info', '检测到宝塔 Nginx，使用 /www/server/panel/vhost/nginx');
+    emit.log('info', `检测到正在运行宝塔 Nginx，使用 /www/server/panel/vhost/nginx。${nginxRuntime.reason}`);
   } else if (ctx.osFamily === 'rhel') {
     await execSudo(ctx, `find /etc/nginx/conf.d -maxdepth 1 -type f -name '00-radar_*.conf' ! -name '00-radar_${hostLabel}.conf' -exec mv -f {} {}.disabled-by-radar \\;`, { allowFail: true, silent: true });
+  } else if (nginxRuntime.hasBtFiles) {
+    emit.log('warn', `发现宝塔 Nginx 残留目录，但实际运行的是系统 Nginx，已改写 /etc/nginx 配置。${nginxRuntime.reason}`);
   }
 
   const confPath = isBtNginx
@@ -644,6 +678,39 @@ async function stepNginxConfig(ctx) {
 
   emit.log('success', `Nginx 配置已生效: ${confPath} (listen ${sitePort})`);
   emit.step('nginx-config', 'success', confPath);
+}
+
+async function detectNginxRuntime(ctx) {
+  const master = await execSudo(
+    ctx,
+    "ps -eo args | grep -E '[n]ginx: master process' || true",
+    { allowFail: true, silent: true }
+  );
+  const masterLine = (master.stdout || '').trim();
+  const btFiles = await execSudo(
+    ctx,
+    'test -d /www/server/panel/vhost/nginx -a -x /www/server/nginx/sbin/nginx && echo yes || true',
+    { allowFail: true, silent: true }
+  );
+  const hasBtFiles = /\byes\b/.test(btFiles.stdout || '');
+
+  if (/\/www\/server\/nginx\/sbin\/nginx/.test(masterLine)) {
+    return { flavor: 'bt', hasBtFiles, reason: `master=${masterLine}` };
+  }
+  if (masterLine) {
+    return { flavor: 'system', hasBtFiles, reason: `master=${masterLine}` };
+  }
+
+  const systemNginx = await execSudo(ctx, 'command -v nginx || true', { allowFail: true, silent: true });
+  const hasSystemNginx = (systemNginx.stdout || '').trim().length > 0;
+  if (hasBtFiles && !hasSystemNginx) {
+    return { flavor: 'bt', hasBtFiles, reason: '未发现系统 nginx 命令，仅发现宝塔 Nginx 文件' };
+  }
+  return {
+    flavor: 'system',
+    hasBtFiles,
+    reason: masterLine ? `master=${masterLine}` : '未发现运行中的 Nginx master，默认使用系统 Nginx',
+  };
 }
 
 async function stepJavaService(ctx) {
@@ -724,20 +791,30 @@ async function stepJavaService(ctx) {
     // 详细诊断：日志 + 端口状态 + JAR 状态
     const log = await execSudo(ctx, 'journalctl -u radar-java.service -n 80 --no-pager', { allowFail: true, silent: true });
     emit.log('error', log.stdout || log.stderr);
-    const sitePort = creds.sitePort || 80;
+    const sitePort = creds.sitePort || 85;
     const portNow = await execSudo(ctx, `ss -lntp | grep -E ":(8888|8080|${sitePort}|9999)" || echo "no-match"`, { allowFail: true, silent: true });
     emit.log('error', `[诊断] 当前端口: ${portNow.stdout.trim()}`);
     const jarNow = await exec(ctx, 'ls -la /www/server/radar-java/wz.jar 2>&1', { allowFail: true, silent: true });
     emit.log('error', `[诊断] JAR: ${jarNow.stdout.trim()}`);
     throw new Error('Java 服务未能启动 (radar-java.service)');
   }
+  const requiredPorts = await execSudo(
+    ctx,
+    "for i in $(seq 1 20); do ss -lnt 2>/dev/null | awk '{print $4}' | grep -Eq '(:|])8888$' && ss -lnt 2>/dev/null | awk '{print $4}' | grep -Eq '(:|])9999$' && exit 0; sleep 1; done; ss -lntp 2>/dev/null | grep -E ':(8888|9999)\\b' || true; exit 1",
+    { allowFail: true, silent: true }
+  );
+  if (requiredPorts.code !== 0) {
+    emit.log('error', `[诊断] Java 端口未全部监听，当前 8888/9999 状态:\n${requiredPorts.stdout.trim() || requiredPorts.stderr.trim() || 'no-listen'}`);
+    throw new Error('Java 服务未同时监听 8888/9999，部署未完成');
+  }
+  emit.log('success', 'Java 8888/9999 端口已监听');
   emit.log('success', 'radar-java.service active');
   emit.step('java-service', 'success', '已启动');
 }
 
 async function stepFirewall(ctx) {
   const { emit, creds } = ctx;
-  const sitePort = creds.sitePort || 80;
+  const sitePort = creds.sitePort || 85;
   const ports = Array.from(new Set([sitePort, 8888, 9999]));
   const portLabel = ports.join(' / ');
   emit.step('firewall', 'running', `放行端口 ${portLabel}`);
@@ -757,6 +834,10 @@ async function stepFirewall(ctx) {
   // ufw
   const ufw = await execSudo(ctx, 'command -v ufw', { silent: true, allowFail: true });
   if (ufw.code === 0) {
+    for (const p of ports) {
+      await execSudo(ctx, `ufw allow ${p}/tcp`, { allowFail: true });
+    }
+    emit.log('success', `ufw 已写入放行规则 ${portLabel}`);
     const ufwStatus = await execSudo(ctx, 'ufw status', { silent: true, allowFail: true });
     if (/Status: active/i.test(ufwStatus.stdout)) {
       for (const p of ports) {
@@ -769,6 +850,8 @@ async function stepFirewall(ctx) {
   // iptables 兜底：只追加 INPUT ACCEPT（不保存，避免污染）
   for (const p of ports) {
     await execSudo(ctx, `iptables -C INPUT -p tcp --dport ${p} -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport ${p} -j ACCEPT`, { allowFail: true });
+    await execSudo(ctx, `ip6tables -C INPUT -p tcp --dport ${p} -j ACCEPT 2>/dev/null || ip6tables -I INPUT -p tcp --dport ${p} -j ACCEPT`, { allowFail: true });
+    await execSudo(ctx, `command -v nft >/dev/null 2>&1 && nft add rule inet filter input tcp dport ${p} accept 2>/dev/null || true`, { allowFail: true });
   }
   emit.log('success', `iptables 已处理 ${portLabel}`);
 
@@ -778,12 +861,14 @@ async function stepFirewall(ctx) {
 
 async function stepHealth(ctx) {
   const { emit, creds } = ctx;
-  const sitePort = creds.sitePort || 80;
+  const sitePort = creds.sitePort || 85;
   emit.step('health', 'running', '检查服务状态');
 
   const checks = [
     { name: `Nginx :${sitePort}`, cmd: `curl --connect-timeout 3 --max-time 8 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${sitePort}/ || echo 000` },
+    { name: 'Nginx /ws proxy', cmd: `bash -lc "exec 3<>/dev/tcp/127.0.0.1/${sitePort}; printf 'GET /ws HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\\r\\nSec-WebSocket-Version: 13\\r\\n\\r\\n' >&3; timeout 4 head -c 256 <&3" 2>/dev/null | grep -q "101 Switching Protocols" && echo 200 || echo 000` },
     { name: 'Java :8888', cmd: "ss -lnt 2>/dev/null | awk '{print $4}' | grep -Eq '(:|])8888$' && echo 200 || echo 000" },
+    { name: 'Java :9999', cmd: "ss -lnt 2>/dev/null | awk '{print $4}' | grep -Eq '(:|])9999$' && echo 200 || echo 000" },
   ];
   if (creds.deployMode === 'card') {
     checks.push({ name: 'Card login API', cmd: `curl --connect-timeout 3 --max-time 8 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${sitePort}/api/auth.php?action=me || echo 000` });
@@ -838,15 +923,15 @@ async function configureCardRuntimeFiles(ctx) {
   const dataDir = `${siteRoot}/data`;
   const phpUser = ctx.phpUser || await detectPhpUser(ctx);
 
-  await execSudo(ctx, `chmod 755 '${siteRoot}' '${siteRoot}/api' '${siteRoot}/admin' '${dataDir}'`, { allowFail: true });
-  await execSudo(ctx, `chmod 644 '${siteRoot}/auth_config.php' '${siteRoot}/api/'*.php '${siteRoot}/admin/'*.php`, { allowFail: true });
-  await execSudo(ctx, `chmod 660 '${dataDir}/'*.db.php 2>/dev/null || true`, { allowFail: true });
+  await execSudo(ctx, `chmod 755 ${shQuote(siteRoot)} ${shQuote(`${siteRoot}/api`)} ${shQuote(`${siteRoot}/admin`)} ${shQuote(dataDir)}`, { allowFail: true });
+  await execSudo(ctx, `chmod 644 ${shQuote(`${siteRoot}/auth_config.php`)} ${shQuote(`${siteRoot}/api`)}/*.php ${shQuote(`${siteRoot}/admin`)}/*.php`, { allowFail: true });
+  await execSudo(ctx, `chmod 660 ${shQuote(dataDir)}/*.db.php 2>/dev/null || true`, { allowFail: true });
 
   if (phpUser) {
-    await execSudo(ctx, `chown -R ${phpUser} '${dataDir}'`, { allowFail: true });
+    await execSudo(ctx, `chown -R ${shQuote(phpUser)} ${shQuote(dataDir)}`, { allowFail: true });
     emit.log('info', `卡密数据目录已授权给 PHP 用户: ${phpUser}`);
   } else {
-    await execSudo(ctx, `chmod -R 777 '${dataDir}'`, { allowFail: true });
+    await execSudo(ctx, `chmod -R 777 ${shQuote(dataDir)}`, { allowFail: true });
     emit.log('warn', '未识别 PHP-FPM 用户，已临时放宽 data 目录权限');
   }
 }
@@ -1032,7 +1117,7 @@ function buildRhelMainNginxConf() {
 // 配置模板
 // ---------------------------------------------------------------------------
 
-function buildNginxConf(siteRoot, useDefaultServer, sitePort = 80, enablePhp = false, phpFastcgiPass = '') {
+function buildNginxConf(siteRoot, useDefaultServer, sitePort = 85, enablePhp = false, phpFastcgiPass = '') {
   const lines = [
     'server {',
     useDefaultServer ? `    listen ${sitePort} default_server;` : `    listen ${sitePort};`,
@@ -1048,6 +1133,19 @@ function buildNginxConf(siteRoot, useDefaultServer, sitePort = 80, enablePhp = f
     '    # 隐藏 .user.ini 等隐藏文件',
     '    location ~ /\\.(?!well-known) {',
     '        deny all;',
+    '    }',
+    '',
+    '    # WebSocket 房间列表/雷达数据反代：网页同端口访问 /ws，后端仍使用固定 Java 8888',
+    '    location /ws {',
+    '        proxy_pass http://127.0.0.1:8888/ws;',
+    '        proxy_http_version 1.1;',
+    '        proxy_set_header Upgrade $http_upgrade;',
+    '        proxy_set_header Connection "Upgrade";',
+    '        proxy_set_header Host $host;',
+    '        proxy_set_header X-Real-IP $remote_addr;',
+    '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
+    '        proxy_read_timeout 3600s;',
+    '        proxy_send_timeout 3600s;',
     '    }',
     '',
     '    # Java 后端反代（可选，通过 /api/ 前缀转发到 8888）',

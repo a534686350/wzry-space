@@ -17,11 +17,13 @@ public class RadarData {
         public int skillCd;
         public int summonerCd;
         public int summonerSkillId;
+        public int deathCd;
         public float x;
         public float y;
         public float hp;
         public int team;
         public boolean dead;
+        public boolean stale;
     }
 
     public static class Minion {

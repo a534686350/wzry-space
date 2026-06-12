@@ -11,16 +11,16 @@
 3. 自动安装并启动 Nginx（若未安装）
 4. 通过 SFTP 把源码上传到 `/www/wwwroot/<IP>/`
 5. 改写 `.user.ini` 中的 `open_basedir` 为实际路径
-6. 写入 Nginx 站点配置，监听 **80** 与 **9999**
-7. 注册 `radar-java.service` systemd 服务并启动（监听 **8888**）
-8. 自动放行 `firewalld / ufw / iptables` 的 `80 / 8888 / 9999` 端口
+6. 写入 Nginx 站点配置，监听 **85**（默认，可在页面修改）
+7. 注册 `radar-java.service` systemd 服务并启动（监听 **8888 / 9999**）
+8. 自动放行 `firewalld / ufw / iptables` 的 `85 / 8888 / 9999` 端口
 9. 做一轮健康检查，给出可点击的访问链接
 10. 部署成功后把 SSH、数据库、后台和 APP 路径记录到 `http://部署器域名/admin`
 11. 部署卡密只在部署成功后失效，失败或取消不会消耗
 
 整个过程通过 WebSocket 把实时日志推送到浏览器。
 
-> ⚠️ 云服务商的"安全组"需要在控制台里额外放行 `80 / 8888 / 9999`，SSH 自动化改不了安全组。
+> ⚠️ 云服务商的"安全组"需要在控制台里额外放行 `85 / 8888 / 9999`，SSH 自动化改不了安全组。
 
 ## 📁 目录结构
 
@@ -98,6 +98,11 @@ WorkingDirectory=/opt/radar-deployer/一键部署器
 ExecStart=/usr/bin/node server.js
 Environment=PORT=3000
 Environment=HOST=0.0.0.0
+Environment=ADMIN_PASSWORD=请改成强后台密码
+# 可选：运营版安装授权码。配置后页面可不再手填安装授权码。
+# Environment=OPS_INSTALL_CODE=请改成你的安装授权码
+# 如果部署器前面有可信 Nginx/HTTPS 反代，并需要按真实访客 IP 做登录限制，打开：
+# Environment=TRUST_PROXY=true
 Restart=on-failure
 
 [Install]
@@ -144,6 +149,8 @@ server {
 
 - **成功记录会落盘**：按业务要求，部署成功后会把 SSH、数据库、后台账号保存到部署器服务器的 `data/deploy-records.json`，并通过 `/admin` 后台查看。这个文件已经加入 `.gitignore`，不会上传到公开仓库。
 - **后台统一管理**：`/admin` 使用 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 登录，可生成一次性部署卡密，也可查看已部署成功的信息。
+- **后台登录限制**：默认同一来源/账号 15 分钟内失败 10 次会临时拒绝，可用 `ADMIN_LOGIN_WINDOW_MS` / `ADMIN_LOGIN_MAX_FAILURES` 调整。
+- **反代真实 IP**：默认不信任客户端传入的 `X-Forwarded-For`；只有部署在可信反代后面时才设置 `TRUST_PROXY=true`。
 - **一次性部署卡密**：前台部署必须填写后台生成的部署卡密；部署成功后卡密自动失效，部署失败或取消会释放卡密。
 - **建议启用 HTTPS**：通过反代 + Let's Encrypt 提供 HTTPS，避免密码在传输层被嗅探。
 - **最小权限**：建议用户使用一个仅限本次部署的 SSH 账号或临时密码，用完改掉。
@@ -156,7 +163,7 @@ server {
 - 能访问公网（`apt-get / yum / dnf` 能拉包）
 - 使用 **root** 或 **具备免密 sudo 能力**（或知道密码）的账号
 - 已开放 `22` 供 SSH 连接
-- 云厂商安全组已放行 `80 / 8888 / 9999`
+- 云厂商安全组已放行 `85 / 8888 / 9999`
 
 ## 🧪 部署器执行的关键远程命令（速查）
 
@@ -169,19 +176,19 @@ server {
 | 改 `.user.ini` | `echo 'open_basedir=/www/wwwroot/<host>/:/tmp/' > /www/wwwroot/<host>/.user.ini` |
 | Nginx 配置 | `/etc/nginx/conf.d/radar_<host>.conf`（RHEL）或 `/etc/nginx/sites-available/radar_<host>.conf`（Debian） |
 | Java 常驻 | `/etc/systemd/system/radar-java.service` → `systemctl restart radar-java.service` |
-| 防火墙 | `firewall-cmd --permanent --add-port=8888/tcp` / `ufw allow 8888/tcp` / `iptables -I INPUT -p tcp --dport 8888 -j ACCEPT` |
+| 防火墙 | `firewall-cmd --permanent --add-port=85/tcp` / `ufw allow 85/tcp` / `iptables -I INPUT -p tcp --dport 85 -j ACCEPT`，同时放行 `8888 / 9999` |
 
 ## 🧾 故障排查
 
 **页面打不开但部署器显示"部署完成"**
 
-1. 登录云厂商控制台检查"安全组"是否放行 `80 / 8888 / 9999`。
-2. 在服务器本地 `curl http://127.0.0.1:9999/`，能通则说明只是外层安全组没开。
+1. 登录云厂商控制台检查"安全组"是否放行 `85 / 8888 / 9999`。
+2. 在服务器本地 `curl http://127.0.0.1:85/`，能通则说明只是外层安全组没开。
 3. 查看 Java 日志：`journalctl -u radar-java.service -n 100 --no-pager`。
 
 **Java 启动失败**
 
-- 端口被占用：`ss -lntp | grep 8888`
+- 端口被占用：`ss -lntp | grep -E ':8888|:9999'`
 - JDK 版本问题：`java -version`，确认是 8+
 - 内存不足：`free -m`，jar 建议至少 1 GB 内存
 
@@ -192,7 +199,7 @@ server {
 
 **Nginx 启动失败**
 
-- 端口冲突：`ss -lntp | grep -E ':80|:9999'`
+- 端口冲突：`ss -lntp | grep -E ':85|:9999'`
 - 配置语法：`nginx -t`
 
 ## 🔧 可定制项

@@ -340,6 +340,41 @@ code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monosp
     background: rgba(74,158,255,0.16); border-radius: 4px;
     color: #c7dcff;
 }
+.group-link {
+    margin-top: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid rgba(34, 211, 238, 0.28);
+    border-radius: 10px;
+    background: linear-gradient(135deg, rgba(34, 211, 238, 0.12), rgba(74, 158, 255, 0.08));
+    color: #dff8ff;
+}
+.group-link strong {
+    display: block;
+    font-size: 13px;
+    color: #ffffff;
+}
+.group-link span {
+    display: block;
+    font-size: 12px;
+    color: #9edff5;
+}
+.group-link .join {
+    flex-shrink: 0;
+    padding: 7px 11px;
+    border-radius: 999px;
+    background: #22d3ee;
+    color: #04111a;
+    font-size: 12px;
+    font-weight: 800;
+}
+.group-link:hover {
+    border-color: rgba(34, 211, 238, 0.55);
+    background: linear-gradient(135deg, rgba(34, 211, 238, 0.18), rgba(74, 158, 255, 0.12));
+}
 
 .actions { margin-top: 16px; display: flex; gap: 10px; }
 .deploy-btn {
@@ -728,49 +763,6 @@ code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monosp
 .u-btn.open:hover { background: linear-gradient(135deg, #5aaaff, #4d8df0); }
 
 /* ============================================================
- * SSH Command Card
- * ============================================================ */
-.ssh-command-card { overflow: hidden; }
-.command-head { margin-bottom: 16px; }
-.command-list { display: grid; gap: 14px; }
-.command-block {
-    padding: 14px;
-    background: rgba(5, 7, 15, 0.48);
-    border: 1px solid rgba(120, 160, 255, 0.16);
-    border-radius: 12px;
-}
-.command-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
-.command-label { font-size: 13px; font-weight: 700; color: #e6ecff; }
-.command-note { font-size: 11.5px; color: #8f99b8; }
-.command-code {
-    margin: 0 0 10px;
-    padding: 12px 13px;
-    background: rgba(0, 0, 0, 0.34);
-    border: 1px solid rgba(120, 160, 255, 0.14);
-    border-radius: 10px;
-    overflow-x: auto;
-    white-space: pre;
-}
-.command-code code { display: block; font-size: 12px; line-height: 1.55; color: #c7dcff; }
-.copy-command { width: 100%; }
-.command-extra {
-    margin-top: 12px;
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-}
-.command-extra span {
-    padding: 8px 10px;
-    background: rgba(74, 158, 255, 0.08);
-    border: 1px solid rgba(74, 158, 255, 0.14);
-    border-radius: 9px;
-    color: #bcc7e8;
-    font-size: 11.5px;
-    text-align: center;
-}
-@media (max-width: 640px) { .command-extra { grid-template-columns: 1fr; } }
-
-/* ============================================================
  * Footer
  * ============================================================ */
 .foot {
@@ -926,6 +918,13 @@ code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monosp
                         <div class="mode-box" style="border-color:rgba(251,191,36,.55);background:rgba(251,191,36,.08);">
                             <div class="mode-title">先填写部署卡密</div>
                             <div class="form-note"><span class="bullet">!</span><span>卡密由后台管理生成，只能成功部署一次。没有卡密不能测试连接，也不能开始部署。</span></div>
+                            <a class="group-link" href="https://qm.qq.com/q/nVqq0P97gs" target="_blank" rel="noopener noreferrer">
+                                <span>
+                                    <strong>进群获取卡密</strong>
+                                    <span>点击链接加入群聊【王者雷达共享开黑组队群】</span>
+                                </span>
+                                <span class="join">立即进群</span>
+                            </a>
                         </div>
 
                         <div class="field full">
@@ -948,7 +947,7 @@ code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monosp
 
                         <div class="field">
                             <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/><path d="M7 4l-2 16"/><path d="M17 4l-2 16"/></svg>
-                            <input type="number" id="f-site-port" name="sitePort" value="80" min="1" max="65535" placeholder=" " required>
+                            <input type="number" id="f-site-port" name="sitePort" min="1" max="65535" placeholder=" " required>
                             <label for="f-site-port">网站访问端口</label>
                         </div>
 
@@ -972,15 +971,15 @@ code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monosp
                             <div class="mode-options">
                                 <label class="mode-option">
                                     <input type="radio" name="deployMode" value="clean" checked>
-                                    <span><strong>纯净版</strong><span>上传 网页源码/纯净版</span></span>
+                                    <span><strong>纯净版</strong><span>基础展示页面，适合快速搭建</span></span>
                                 </label>
                                 <label class="mode-option">
                                     <input type="radio" name="deployMode" value="card">
-                                    <span><strong>卡密版</strong><span>上传 网页源码/卡密版，带后台管理</span></span>
+                                    <span><strong>卡密版</strong><span>带卡密后台，适合授权管理</span></span>
                                 </label>
                                 <label class="mode-option">
                                     <input type="radio" name="deployMode" value="ops">
-                                    <span><strong>运营版</strong><span>远程拉取 GitHub/Gitee 源码，不占用部署器本地源码</span></span>
+                                    <span><strong>运营版</strong><span>完整前后台和数据库，适合正式运营</span></span>
                                 </label>
                             </div>
                         </div>
@@ -1053,37 +1052,6 @@ code { font-family: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monosp
 
         <!-- ============== RIGHT COLUMN ============== -->
         <div class="col-right">
-
-            <!-- SSH COMMAND CARD -->
-            <section class="card ssh-command-card">
-                <div class="card-head command-head">
-                    <h2><span class="step-badge">SSH</span> 智能一键命令</h2>
-                    <p class="tip-text">网络好优先走 GitHub，失败自动切换 Gitee，直接复制到 SSH 窗口执行。</p>
-                </div>
-                <div class="command-list">
-                    <div class="command-block">
-                        <div class="command-meta">
-                            <span class="command-label">安装命令</span>
-                            <span class="command-note">首次搭建</span>
-                        </div>
-                        <pre class="command-code"><code id="smartInstallCmd">SRC=github; (curl -fsSL --connect-timeout 8 --max-time 25 https://raw.githubusercontent.com/a534686350/wzry-space/main/scripts/cloud-install.sh -o /tmp/wzry-install.sh || { SRC=gitee; curl -fsSL --connect-timeout 8 --max-time 25 https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-install.sh -o /tmp/wzry-install.sh; }) &amp;&amp; bash /tmp/wzry-install.sh --source &quot;$SRC&quot;</code></pre>
-                        <button type="button" class="u-btn copy copy-command" data-copy-target="smartInstallCmd">复制安装命令</button>
-                    </div>
-                    <div class="command-block">
-                        <div class="command-meta">
-                            <span class="command-label">更新命令</span>
-                            <span class="command-note">后续更新</span>
-                        </div>
-                        <pre class="command-code"><code id="smartUpdateCmd">SRC=github; (curl -fsSL --connect-timeout 8 --max-time 25 https://raw.githubusercontent.com/a534686350/wzry-space/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh || { SRC=gitee; curl -fsSL --connect-timeout 8 --max-time 25 https://gitee.com/hl515/wzry-space/raw/main/scripts/cloud-update.sh -o /tmp/wzry-update.sh; }) &amp;&amp; bash /tmp/wzry-update.sh --source &quot;$SRC&quot;</code></pre>
-                        <button type="button" class="u-btn copy copy-command" data-copy-target="smartUpdateCmd">复制更新命令</button>
-                    </div>
-                </div>
-                <div class="command-extra">
-                    <span>自动选择 GitHub/Gitee</span>
-                    <span>服务器 SSH 执行</span>
-                    <span>不上传本地源码</span>
-                </div>
-            </section>
 
             <!-- PROGRESS CARD -->
             <section class="card progress-card">
