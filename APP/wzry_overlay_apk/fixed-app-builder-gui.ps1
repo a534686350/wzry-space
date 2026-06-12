@@ -31,7 +31,14 @@ function Get-DefaultOutputDir {
 }
 
 $DefaultOutputDir = Get-DefaultOutputDir
+$DefaultNoBackendApiBase = 'https://101.200.36.10:80'
 $DefaultAppName = 'Mg共享雷达'
+$DefaultHomeTitle = 'MG Radar'
+$DefaultPanelTitle = 'MG内核内部版'
+$DefaultPanelChannel = 'SVIP10'
+$DefaultPanelStatus = '游戏进程已初始化'
+$DefaultVersionName = 'v6.1.16'
+$DefaultVersionCode = '16'
 $DefaultBuyUrl = ''
 $DefaultIconPath = ''
 
@@ -215,6 +222,26 @@ function Get-BrandingOptions {
     if ($appName.Contains('"')) {
         throw 'APP 名称不能包含英文双引号。'
     }
+    $homeTitle = ($homeTitleInput.Text -as [string]).Trim()
+    if ([string]::IsNullOrWhiteSpace($homeTitle)) {
+        $homeTitle = $appName
+    }
+    if ($homeTitle.Contains('"')) {
+        throw '主页标题不能包含英文双引号。'
+    }
+    $panelTitle = ($panelTitleInput.Text -as [string]).Trim()
+    if ([string]::IsNullOrWhiteSpace($panelTitle)) { $panelTitle = $homeTitle }
+    if ($panelTitle.Contains('"')) {
+        throw '面板标题不能包含英文双引号。'
+    }
+    $panelChannel = ($panelChannelInput.Text -as [string]).Trim()
+    if ($panelChannel.Contains('"')) {
+        throw '频道文字不能包含英文双引号。'
+    }
+    $panelStatus = ($panelStatusInput.Text -as [string]).Trim()
+    if ($panelStatus.Contains('"')) {
+        throw '状态文字不能包含英文双引号。'
+    }
 
     $iconFile = ($iconInput.Text -as [string]).Trim()
     if (-not [string]::IsNullOrWhiteSpace($iconFile)) {
@@ -228,8 +255,34 @@ function Get-BrandingOptions {
 
     [pscustomobject]@{
         AppName = $appName
+        HomeTitle = $homeTitle
+        PanelTitle = $panelTitle
+        PanelChannel = $panelChannel
+        PanelStatus = $panelStatus
         IconFile = $iconFile
         SafeName = Get-SafeFilePart $appName
+    }
+}
+
+function Get-VersionOptions {
+    $versionName = ($versionNameInput.Text -as [string]).Trim()
+    if ([string]::IsNullOrWhiteSpace($versionName)) {
+        throw '请输入版本名，例如 v6.1.12。'
+    }
+    if ($versionName.Contains('"')) {
+        throw '版本名不能包含英文双引号。'
+    }
+
+    $versionCode = 0
+    $rawCode = ($versionCodeInput.Text -as [string]).Trim()
+    if (-not [int]::TryParse($rawCode, [ref]$versionCode) -or $versionCode -lt 1) {
+        throw '版本号必须是大于 0 的整数，并且新版本要比后台旧版本更大。'
+    }
+
+    [pscustomobject]@{
+        VersionName = $versionName
+        VersionCode = $versionCode
+        SafeName = Get-SafeFilePart $versionName
     }
 }
 
@@ -255,6 +308,12 @@ function Set-Building {
     $loginModeInput.Enabled = -not $IsBuilding
     $buyUrlInput.Enabled = -not $IsBuilding
     $appNameInput.Enabled = -not $IsBuilding
+    $homeTitleInput.Enabled = -not $IsBuilding
+    $panelTitleInput.Enabled = -not $IsBuilding
+    $panelChannelInput.Enabled = -not $IsBuilding
+    $panelStatusInput.Enabled = -not $IsBuilding
+    $versionNameInput.Enabled = -not $IsBuilding
+    $versionCodeInput.Enabled = -not $IsBuilding
     $iconInput.Enabled = -not $IsBuilding
     $browseIconButton.Enabled = -not $IsBuilding
     $outputInput.Enabled = -not $IsBuilding
@@ -288,8 +347,10 @@ function Update-Preview {
     try {
         $target = Normalize-Target $hostInput.Text $portInput.Text $schemeInput.SelectedItem
         $wsPort = Get-WebSocketPort
+        $selectedLoginMode = Get-SelectedLoginMode
+        $apiBase = if ($selectedLoginMode -eq 'frontend') { $DefaultNoBackendApiBase } else { $target.ApiBase }
         $script:LastTarget = $target
-        $previewLabel.Text = "后台/API：$($target.ApiBase)    房间/雷达WS：ws://$($target.Host):$wsPort/ws"
+        $previewLabel.Text = "后台/API：$apiBase    房间/雷达WS：ws://$($target.Host):$wsPort/ws"
         $previewLabel.ForeColor = [System.Drawing.Color]::FromArgb(28, 99, 52)
     }
     catch {
@@ -410,18 +471,23 @@ function Finish-Build {
         if ($null -eq $buildLog) { $buildLog = '' }
     }
     $gradleSucceeded = $buildLog -match 'BUILD SUCCESSFUL'
-    if ($exitCode -ne 0 -and -not ($gradleSucceeded -and (Test-Path -LiteralPath $ReleaseApk))) {
+    $builtApk = Get-ReleaseApkPath
+    if ($exitCode -ne 0 -and -not ($gradleSucceeded -and (-not [string]::IsNullOrWhiteSpace($builtApk)) -and (Test-Path -LiteralPath $builtApk))) {
         $statusLabel.Text = "打包失败，退出码：$exitCode"
         [System.Windows.Forms.MessageBox]::Show("打包失败，请查看下方日志。", 'ALinRadar APK 打包器', 'OK', 'Error') | Out-Null
         return
     }
-    if (-not (Test-Path -LiteralPath $ReleaseApk)) {
+    if ([string]::IsNullOrWhiteSpace($builtApk) -or -not (Test-Path -LiteralPath $builtApk)) {
         $statusLabel.Text = '打包结束，但没有找到 release APK。'
         [System.Windows.Forms.MessageBox]::Show('没有找到 release APK。', 'ALinRadar APK 打包器', 'OK', 'Error') | Out-Null
         return
     }
 
-    Copy-Item -LiteralPath $ReleaseApk -Destination $script:OutputApk -Force
+    Copy-Item -LiteralPath $builtApk -Destination $script:OutputApk -Force
+    $releaseNamedApk = Join-Path $ReleaseDir ([System.IO.Path]::GetFileName($script:OutputApk))
+    if ($releaseNamedApk -ne $builtApk) {
+        Copy-Item -LiteralPath $builtApk -Destination $releaseNamedApk -Force
+    }
     $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $script:OutputApk
     $statusLabel.Text = "完成：$script:OutputApk"
     $openApkButton.Enabled = $true
@@ -430,6 +496,7 @@ function Finish-Build {
         Append-Log "提示：Gradle 已显示 BUILD SUCCESSFUL，已忽略 PowerShell 对 stderr 提示的误判。"
     }
     Append-Log "APK 已生成：$script:OutputApk"
+    Append-Log "release 目录副本：$releaseNamedApk"
     Append-Log "SHA256: $($hash.Hash)"
     [System.Windows.Forms.MessageBox]::Show("APK 打包成功。`r`n$script:OutputApk", 'ALinRadar APK 打包器', 'OK', 'Information') | Out-Null
 }
@@ -440,6 +507,7 @@ function Start-Build {
         Test-RequiredTools
         $target = Normalize-Target $hostInput.Text $portInput.Text $schemeInput.SelectedItem
         $branding = Get-BrandingOptions
+        $version = Get-VersionOptions
         $wsPort = Get-WebSocketPort
         $buyUrl = Get-OptionalUrl $buyUrlInput.Text '购买卡密链接'
         $selectedLoginMode = Get-SelectedLoginMode
@@ -451,6 +519,7 @@ function Start-Build {
             $loginMode = $backendCheck.LoginMode
             Append-Log "自动检测结果：$($backendCheck.Message)"
         }
+        $apkApiBase = if ($loginMode -eq 'frontend') { $DefaultNoBackendApiBase } else { $target.ApiBase }
         $outputDir = $outputInput.Text.Trim()
         if ([string]::IsNullOrWhiteSpace($outputDir)) {
             $outputDir = $DefaultOutputDir
@@ -458,10 +527,11 @@ function Start-Build {
         New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
         $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-        $script:OutputApk = Join-Path $outputDir ($branding.SafeName + "-" + $target.SafeHost + "-" + $stamp + ".apk")
-        $script:LogFile = Join-Path $outputDir ("build-" + $branding.SafeName + "-" + $target.SafeHost + "-" + $stamp + ".log")
-        $script:ErrLogFile = Join-Path $outputDir ("build-" + $branding.SafeName + "-" + $target.SafeHost + "-" + $stamp + ".err.log")
-        $script:BuildScriptFile = Join-Path $outputDir ("build-" + $branding.SafeName + "-" + $target.SafeHost + "-" + $stamp + ".ps1")
+        $namePart = $branding.SafeName + "-" + $version.SafeName + "-" + $target.SafeHost + "-" + $stamp
+        $script:OutputApk = Join-Path $outputDir ($namePart + ".apk")
+        $script:LogFile = Join-Path $outputDir ("build-" + $namePart + ".log")
+        $script:ErrLogFile = Join-Path $outputDir ("build-" + $namePart + ".err.log")
+        $script:BuildScriptFile = Join-Path $outputDir ("build-" + $namePart + ".ps1")
         $script:LastLogText = ''
         $script:LastErrLogText = ''
         $openApkButton.Enabled = $false
@@ -470,12 +540,18 @@ function Start-Build {
         $gradleArgs.Add('--no-daemon') | Out-Null
         $gradleArgs.Add('clean') | Out-Null
         $gradleArgs.Add('assembleRelease') | Out-Null
-        $gradleArgs.Add('-PAPP_API_BASE=' + $target.ApiBase) | Out-Null
+        $gradleArgs.Add('-PAPP_API_BASE=' + $apkApiBase) | Out-Null
         $gradleArgs.Add('-PAPP_SERVER_HOST=' + $target.Host) | Out-Null
         $gradleArgs.Add('-PAPP_SERVER_PORT=' + $wsPort) | Out-Null
         $gradleArgs.Add('-PAPP_FIXED=true') | Out-Null
         $gradleArgs.Add('-PAPP_LOGIN_MODE=' + $loginMode) | Out-Null
         $gradleArgs.Add('-PAPP_NAME=' + $branding.AppName) | Out-Null
+        $gradleArgs.Add('-PAPP_HOME_TITLE=' + $branding.HomeTitle) | Out-Null
+        $gradleArgs.Add('-PAPP_PANEL_TITLE=' + $branding.PanelTitle) | Out-Null
+        $gradleArgs.Add('-PAPP_PANEL_CHANNEL=' + $branding.PanelChannel) | Out-Null
+        $gradleArgs.Add('-PAPP_PANEL_STATUS=' + $branding.PanelStatus) | Out-Null
+        $gradleArgs.Add('-PAPP_VERSION_NAME=' + $version.VersionName) | Out-Null
+        $gradleArgs.Add('-PAPP_VERSION_CODE=' + $version.VersionCode) | Out-Null
         if (-not [string]::IsNullOrWhiteSpace($branding.IconFile)) {
             $gradleArgs.Add('-PAPP_ICON_FILE=' + $branding.IconFile) | Out-Null
         }
@@ -514,13 +590,18 @@ function Start-Build {
         [System.IO.File]::WriteAllLines($script:BuildScriptFile, $buildScriptLines, $utf8Bom)
 
         Append-Log "APP 名称：$($branding.AppName)"
+        Append-Log "主页标题：$($branding.HomeTitle)"
+        Append-Log "面板标题：$($branding.PanelTitle)"
+        Append-Log "频道文字：$($branding.PanelChannel)"
+        Append-Log "状态文字：$($branding.PanelStatus)"
+        Append-Log "APP 版本：$($version.VersionName) ($($version.VersionCode))"
         if (-not [string]::IsNullOrWhiteSpace($branding.IconFile)) {
             Append-Log "APP 图标：$($branding.IconFile)"
         }
         else {
             Append-Log 'APP 图标：使用默认图标'
         }
-        Append-Log "APK 固定访问地址：$($target.ApiBase)"
+        Append-Log "APK 后台/API：$apkApiBase"
         Append-Log "房间/雷达 WebSocket：ws://$($target.Host):$wsPort/ws"
         Append-Log "是否带后台：$loginMode（backend=带后台登录/API，frontend=不带后台免登录）"
         if (-not [string]::IsNullOrWhiteSpace($buyUrl)) {
@@ -552,9 +633,9 @@ function Start-Build {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'ALinRadar 本地 APK 打包器'
-$form.Size = New-Object System.Drawing.Size(860, 780)
+$form.Size = New-Object System.Drawing.Size(860, 850)
 $form.StartPosition = 'CenterScreen'
-$form.MinimumSize = New-Object System.Drawing.Size(840, 730)
+$form.MinimumSize = New-Object System.Drawing.Size(840, 810)
 $form.BackColor = [System.Drawing.Color]::FromArgb(245, 248, 252)
 
 $title = New-Object System.Windows.Forms.Label
@@ -610,7 +691,7 @@ $form.Controls.Add($portLabel)
 $portInput = New-Object System.Windows.Forms.TextBox
 $portInput.Location = New-Object System.Drawing.Point(628, 85)
 $portInput.Size = New-Object System.Drawing.Size(55, 26)
-$portInput.Text = '55555'
+$portInput.Text = '85'
 $portInput.Add_TextChanged({ Update-Preview })
 $form.Controls.Add($portInput)
 
@@ -646,10 +727,11 @@ $loginModeInput.Items.Add('不带后台（免登录）') | Out-Null
 $loginModeInput.SelectedIndex = 1
 $loginModeInput.Location = New-Object System.Drawing.Point(130, 155)
 $loginModeInput.Size = New-Object System.Drawing.Size(220, 26)
+$loginModeInput.Add_SelectedIndexChanged({ Update-Preview })
 $form.Controls.Add($loginModeInput)
 
 $loginModeHint = New-Object System.Windows.Forms.Label
-$loginModeHint.Text = '两种模式房间数据都走 ws://IP:WS端口/ws，默认 8888。'
+$loginModeHint.Text = '不带后台时管理/API 固定走 101.200.36.10:80；房间数据仍走输入IP的8888。'
 $loginModeHint.Location = New-Object System.Drawing.Point(366, 158)
 $loginModeHint.Size = New-Object System.Drawing.Size(390, 24)
 $loginModeHint.ForeColor = [System.Drawing.Color]::FromArgb(82, 94, 112)
@@ -682,25 +764,97 @@ $form.Controls.Add($appNameLabel)
 
 $appNameInput = New-Object System.Windows.Forms.TextBox
 $appNameInput.Location = New-Object System.Drawing.Point(130, 259)
-$appNameInput.Size = New-Object System.Drawing.Size(515, 26)
+$appNameInput.Size = New-Object System.Drawing.Size(285, 26)
 $appNameInput.Text = $DefaultAppName
 $form.Controls.Add($appNameInput)
 
+$homeTitleLabel = New-Object System.Windows.Forms.Label
+$homeTitleLabel.Text = '主页标题'
+$homeTitleLabel.Location = New-Object System.Drawing.Point(24, 298)
+$homeTitleLabel.Size = New-Object System.Drawing.Size(100, 24)
+$form.Controls.Add($homeTitleLabel)
+
+$homeTitleInput = New-Object System.Windows.Forms.TextBox
+$homeTitleInput.Location = New-Object System.Drawing.Point(130, 295)
+$homeTitleInput.Size = New-Object System.Drawing.Size(285, 26)
+$homeTitleInput.Text = $DefaultHomeTitle
+$form.Controls.Add($homeTitleInput)
+
+$panelTitleLabel = New-Object System.Windows.Forms.Label
+$panelTitleLabel.Text = '面板标题'
+$panelTitleLabel.Location = New-Object System.Drawing.Point(428, 298)
+$panelTitleLabel.Size = New-Object System.Drawing.Size(70, 24)
+$form.Controls.Add($panelTitleLabel)
+
+$panelTitleInput = New-Object System.Windows.Forms.TextBox
+$panelTitleInput.Location = New-Object System.Drawing.Point(502, 295)
+$panelTitleInput.Size = New-Object System.Drawing.Size(254, 26)
+$panelTitleInput.Text = $DefaultPanelTitle
+$form.Controls.Add($panelTitleInput)
+
+$panelChannelLabel = New-Object System.Windows.Forms.Label
+$panelChannelLabel.Text = '频道文字'
+$panelChannelLabel.Location = New-Object System.Drawing.Point(24, 334)
+$panelChannelLabel.Size = New-Object System.Drawing.Size(100, 24)
+$form.Controls.Add($panelChannelLabel)
+
+$panelChannelInput = New-Object System.Windows.Forms.TextBox
+$panelChannelInput.Location = New-Object System.Drawing.Point(130, 331)
+$panelChannelInput.Size = New-Object System.Drawing.Size(626, 26)
+$panelChannelInput.Text = $DefaultPanelChannel
+$form.Controls.Add($panelChannelInput)
+
+$panelStatusLabel = New-Object System.Windows.Forms.Label
+$panelStatusLabel.Text = '状态文字'
+$panelStatusLabel.Location = New-Object System.Drawing.Point(24, 370)
+$panelStatusLabel.Size = New-Object System.Drawing.Size(100, 24)
+$form.Controls.Add($panelStatusLabel)
+
+$panelStatusInput = New-Object System.Windows.Forms.TextBox
+$panelStatusInput.Location = New-Object System.Drawing.Point(130, 367)
+$panelStatusInput.Size = New-Object System.Drawing.Size(626, 26)
+$panelStatusInput.Text = $DefaultPanelStatus
+$form.Controls.Add($panelStatusInput)
+
+$versionNameLabel = New-Object System.Windows.Forms.Label
+$versionNameLabel.Text = '版本名'
+$versionNameLabel.Location = New-Object System.Drawing.Point(428, 262)
+$versionNameLabel.Size = New-Object System.Drawing.Size(54, 24)
+$form.Controls.Add($versionNameLabel)
+
+$versionNameInput = New-Object System.Windows.Forms.TextBox
+$versionNameInput.Location = New-Object System.Drawing.Point(482, 259)
+$versionNameInput.Size = New-Object System.Drawing.Size(92, 26)
+$versionNameInput.Text = $DefaultVersionName
+$form.Controls.Add($versionNameInput)
+
+$versionCodeLabel = New-Object System.Windows.Forms.Label
+$versionCodeLabel.Text = '版本号'
+$versionCodeLabel.Location = New-Object System.Drawing.Point(588, 262)
+$versionCodeLabel.Size = New-Object System.Drawing.Size(54, 24)
+$form.Controls.Add($versionCodeLabel)
+
+$versionCodeInput = New-Object System.Windows.Forms.TextBox
+$versionCodeInput.Location = New-Object System.Drawing.Point(642, 259)
+$versionCodeInput.Size = New-Object System.Drawing.Size(114, 26)
+$versionCodeInput.Text = $DefaultVersionCode
+$form.Controls.Add($versionCodeInput)
+
 $iconLabel = New-Object System.Windows.Forms.Label
 $iconLabel.Text = 'APP图标'
-$iconLabel.Location = New-Object System.Drawing.Point(24, 298)
+$iconLabel.Location = New-Object System.Drawing.Point(24, 406)
 $iconLabel.Size = New-Object System.Drawing.Size(100, 24)
 $form.Controls.Add($iconLabel)
 
 $iconInput = New-Object System.Windows.Forms.TextBox
-$iconInput.Location = New-Object System.Drawing.Point(130, 295)
+$iconInput.Location = New-Object System.Drawing.Point(130, 403)
 $iconInput.Size = New-Object System.Drawing.Size(515, 26)
 $iconInput.Text = $DefaultIconPath
 $form.Controls.Add($iconInput)
 
 $browseIconButton = New-Object System.Windows.Forms.Button
 $browseIconButton.Text = '选择图片'
-$browseIconButton.Location = New-Object System.Drawing.Point(658, 293)
+$browseIconButton.Location = New-Object System.Drawing.Point(658, 401)
 $browseIconButton.Size = New-Object System.Drawing.Size(98, 30)
 $browseIconButton.Add_Click({
     $dialog = New-Object System.Windows.Forms.OpenFileDialog
@@ -718,19 +872,19 @@ $form.Controls.Add($browseIconButton)
 
 $outputLabel = New-Object System.Windows.Forms.Label
 $outputLabel.Text = '输出文件夹'
-$outputLabel.Location = New-Object System.Drawing.Point(24, 334)
+$outputLabel.Location = New-Object System.Drawing.Point(24, 442)
 $outputLabel.Size = New-Object System.Drawing.Size(100, 24)
 $form.Controls.Add($outputLabel)
 
 $outputInput = New-Object System.Windows.Forms.TextBox
-$outputInput.Location = New-Object System.Drawing.Point(130, 331)
+$outputInput.Location = New-Object System.Drawing.Point(130, 439)
 $outputInput.Size = New-Object System.Drawing.Size(515, 26)
 $outputInput.Text = $DefaultOutputDir
 $form.Controls.Add($outputInput)
 
 $browseButton = New-Object System.Windows.Forms.Button
 $browseButton.Text = '选择目录'
-$browseButton.Location = New-Object System.Drawing.Point(658, 329)
+$browseButton.Location = New-Object System.Drawing.Point(658, 437)
 $browseButton.Size = New-Object System.Drawing.Size(98, 30)
 $browseButton.Add_Click({
     $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -743,14 +897,14 @@ $form.Controls.Add($browseButton)
 
 $testButton = New-Object System.Windows.Forms.Button
 $testButton.Text = '测试网页/API'
-$testButton.Location = New-Object System.Drawing.Point(130, 374)
+$testButton.Location = New-Object System.Drawing.Point(130, 482)
 $testButton.Size = New-Object System.Drawing.Size(140, 36)
 $testButton.Add_Click({ Invoke-BackendTest })
 $form.Controls.Add($testButton)
 
 $buildButton = New-Object System.Windows.Forms.Button
 $buildButton.Text = '一键打包 APK'
-$buildButton.Location = New-Object System.Drawing.Point(284, 374)
+$buildButton.Location = New-Object System.Drawing.Point(284, 482)
 $buildButton.Size = New-Object System.Drawing.Size(140, 36)
 $buildButton.BackColor = [System.Drawing.Color]::FromArgb(36, 105, 245)
 $buildButton.ForeColor = [System.Drawing.Color]::White
@@ -760,7 +914,7 @@ $form.Controls.Add($buildButton)
 
 $openButton = New-Object System.Windows.Forms.Button
 $openButton.Text = '打开目录'
-$openButton.Location = New-Object System.Drawing.Point(438, 374)
+$openButton.Location = New-Object System.Drawing.Point(438, 482)
 $openButton.Size = New-Object System.Drawing.Size(120, 36)
 $openButton.Add_Click({
     $dir = $outputInput.Text.Trim()
@@ -772,7 +926,7 @@ $form.Controls.Add($openButton)
 
 $openApkButton = New-Object System.Windows.Forms.Button
 $openApkButton.Text = '定位 APK'
-$openApkButton.Location = New-Object System.Drawing.Point(572, 374)
+$openApkButton.Location = New-Object System.Drawing.Point(572, 482)
 $openApkButton.Size = New-Object System.Drawing.Size(120, 36)
 $openApkButton.Enabled = $false
 $openApkButton.Add_Click({
@@ -784,19 +938,19 @@ $form.Controls.Add($openApkButton)
 
 $statusLabel = New-Object System.Windows.Forms.Label
 $statusLabel.Text = '就绪。'
-$statusLabel.Location = New-Object System.Drawing.Point(24, 426)
+$statusLabel.Location = New-Object System.Drawing.Point(24, 534)
 $statusLabel.Size = New-Object System.Drawing.Size(735, 24)
 $form.Controls.Add($statusLabel)
 
 $progress = New-Object System.Windows.Forms.ProgressBar
-$progress.Location = New-Object System.Drawing.Point(24, 454)
+$progress.Location = New-Object System.Drawing.Point(24, 562)
 $progress.Size = New-Object System.Drawing.Size(732, 18)
 $progress.Value = 0
 $form.Controls.Add($progress)
 
 $logBox = New-Object System.Windows.Forms.TextBox
-$logBox.Location = New-Object System.Drawing.Point(24, 490)
-$logBox.Size = New-Object System.Drawing.Size(732, 250)
+$logBox.Location = New-Object System.Drawing.Point(24, 598)
+$logBox.Size = New-Object System.Drawing.Size(732, 190)
 $logBox.Multiline = $true
 $logBox.ScrollBars = 'Vertical'
 $logBox.ReadOnly = $true

@@ -27,7 +27,6 @@ import java.util.Map;
 
 public class RadarView extends View {
     private static final int MAX_STABLE_HEROES = 5;
-    private static final int HERO_DROP_AFTER_MISSING_FRAMES = 6;
     private static final int[] MONSTER_READY_CD_VALUES = {0, 60, 70, 90, 120, 240};
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -62,9 +61,9 @@ public class RadarView extends View {
     private boolean showMinions = true;
     private boolean showMonsters = true;
     private boolean showZeroSkillCd = false;
+    private boolean touchEditingEnabled;
     private final Map<String, String> heroNames = new HashMap<>();
     private final Map<String, RadarData.Hero> lastHeroes = new HashMap<>();
-    private final Map<String, Integer> heroMissingFrames = new HashMap<>();
     private final List<String> heroOrder = new ArrayList<>();
 
     public RadarView(Context context) {
@@ -89,7 +88,6 @@ public class RadarView extends View {
 
     public void clearHeroCache() {
         lastHeroes.clear();
-        heroMissingFrames.clear();
         heroOrder.clear();
         data = new RadarData();
         invalidate();
@@ -121,25 +119,21 @@ public class RadarView extends View {
             if (hero.dead || hero.hp <= 0) {
                 incomingOrder.add(hero.id);
                 lastHeroes.remove(hero.id);
-                heroMissingFrames.remove(hero.id);
                 heroOrder.remove(hero.id);
                 continue;
             }
             incoming.put(hero.id, hero);
             incomingOrder.add(hero.id);
             lastHeroes.put(hero.id, copyHero(hero));
-            heroMissingFrames.put(hero.id, 0);
             if (!heroOrder.contains(hero.id)) heroOrder.add(hero.id);
         }
         if (incoming.size() >= MAX_STABLE_HEROES && !hasAnyActiveHero(incoming, previousOrder)) {
             heroOrder.clear();
             lastHeroes.clear();
-            heroMissingFrames.clear();
             for (String id : incomingOrder) {
                 RadarData.Hero hero = incoming.get(id);
                 if (hero == null) continue;
                 lastHeroes.put(id, copyHero(hero));
-                heroMissingFrames.put(id, 0);
                 heroOrder.add(id);
                 if (heroOrder.size() >= MAX_STABLE_HEROES) break;
             }
@@ -158,19 +152,11 @@ public class RadarView extends View {
             if (hero == null) {
                 RadarData.Hero last = lastHeroes.get(id);
                 if (last == null) continue;
-                int missing = heroMissingFrames.containsKey(id) ? heroMissingFrames.get(id) + 1 : 1;
-                if (missing > HERO_DROP_AFTER_MISSING_FRAMES) {
-                    lastHeroes.remove(id);
-                    heroMissingFrames.remove(id);
-                    continue;
-                }
-                heroMissingFrames.put(id, missing);
                 hero = copyHero(last);
                 hero.stale = true;
             }
             if (hero.dead || hero.hp <= 0) {
                 lastHeroes.remove(id);
-                heroMissingFrames.remove(id);
                 continue;
             }
             next.heroes.add(hero);
@@ -307,6 +293,11 @@ public class RadarView extends View {
         invalidate();
     }
 
+    public void setTouchEditingEnabled(boolean enabled) {
+        touchEditingEnabled = enabled;
+        if (!enabled) lastPinchDistance = 0;
+    }
+
     public void setLayerVisibility(boolean map, boolean heroes, boolean minions, boolean monsters, boolean skills) {
         showMap = map;
         showHeroes = heroes;
@@ -436,20 +427,26 @@ public class RadarView extends View {
         float ultTop = cy - avatarR - ultBox - dp(4) * s;
         RectF ultRect = new RectF(cx - ultBox / 2f, ultTop, cx + ultBox / 2f, ultTop + ultBox);
         Bitmap ultIcon = iconCache != null ? iconCache.getUlt(hero.id, this::invalidate) : null;
+        boolean ultLocked = hero.level < 4;
+        boolean ultCooling = hero.ultCd > 0;
         if (ultIcon != null) {
             drawRoundBitmap(canvas, ultIcon, ultRect, dp(3) * s);
         } else {
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(hero.dead ? 0x66475569 : 0x992563eb);
+            paint.setColor(hero.dead || ultLocked ? 0x88475569 : 0x992563eb);
             canvas.drawRoundRect(ultRect, dp(3) * s, dp(3) * s, paint);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(dp(1));
             paint.setColor(0x99ffffff);
             canvas.drawRoundRect(ultRect, dp(3) * s, dp(3) * s, paint);
         }
-        if (hero.dead) {
+        if (hero.dead || ultLocked || ultCooling) {
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(0x99020617);
+            paint.setColor(hero.dead || ultLocked ? 0xaa020617 : 0x77020617);
+            canvas.drawRoundRect(ultRect, dp(3) * s, dp(3) * s, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(1) * s);
+            paint.setColor(ultLocked ? 0xff94a3b8 : 0x99ffffff);
             canvas.drawRoundRect(ultRect, dp(3) * s, dp(3) * s, paint);
         }
         textPaint.setTextAlign(Paint.Align.CENTER);
@@ -457,7 +454,7 @@ public class RadarView extends View {
         textPaint.setColor(hero.dead ? 0x99ffffff : 0xffffffff);
         textPaint.setTextSize(Math.max(dp(8) * s, ultBox * 0.5f));
         textPaint.setShadowLayer(dp(2) * s, 0, 0, 0xcc000000);
-        if (shouldDrawSkillCountdown(hero.ultCd)) {
+        if (!ultLocked && shouldDrawSkillCountdown(hero.ultCd)) {
             String ultText = String.valueOf(Math.max(0, Math.min(999, hero.ultCd)));
             canvas.drawText(ultText, ultRect.centerX(), ultRect.centerY() + textPaint.getTextSize() * 0.35f, textPaint);
         }
@@ -508,7 +505,7 @@ public class RadarView extends View {
     }
 
     private boolean shouldDrawSkillCountdown(int cd) {
-        return cd > 0 || (showZeroSkillCd && cd == 0);
+        return cd > 0;
     }
 
     private void drawMinions(Canvas canvas, RectF map) {
@@ -649,6 +646,7 @@ public class RadarView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (!touchEditingEnabled) return false;
         if (event.getPointerCount() >= 2) {
             float d = pointerDistance(event);
             if (event.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN) {

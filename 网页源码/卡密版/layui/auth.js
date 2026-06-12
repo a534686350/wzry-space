@@ -222,16 +222,63 @@
     }
 
     function startAppOnce() {
-        if (state.started) return;
-        state.started = true;
+        if (state.started && window.__radarAppStarted) return;
+
+        function fallbackStart() {
+            if (window.__radarAppStarted) {
+                state.started = true;
+                return;
+            }
+            if (typeof window.initWebSocket === "function") {
+                try {
+                    window.__radarAppStarted = true;
+                    window.initWebSocket();
+                    state.started = true;
+                    return;
+                } catch (e) {}
+            }
+            state.started = false;
+            setTimeout(startAppOnce, 300);
+        }
 
         if (typeof window.__cardOriginalInitApp !== "function" && typeof window.initApp === "function" && window.initApp !== ensureAuthorized) {
             window.__cardOriginalInitApp = window.initApp;
         }
 
         if (typeof window.__cardOriginalInitApp === "function") {
-            window.__cardOriginalInitApp();
+            try {
+                window.__cardOriginalInitApp();
+            } catch (e) {
+                setTimeout(startAppOnce, 300);
+                return;
+            }
+
+            if (window.__radarAppStarted) {
+                state.started = true;
+                return;
+            }
+
+            setTimeout(fallbackStart, 500);
+            return;
         }
+
+        if (typeof window.initWebSocket === "function") {
+            try {
+                window.__radarAppStarted = true;
+                window.initWebSocket();
+                state.started = true;
+                return;
+            } catch (e) {}
+        }
+
+        state.started = false;
+        setTimeout(startAppOnce, 300);
+    }
+
+    function triggerAuthCheck() {
+        setTimeout(function () {
+            if (!state.started) ensureAuthorized();
+        }, 0);
     }
 
     function ensureAuthorized() {
@@ -285,14 +332,19 @@
     }
 
     if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", installGate);
+        document.addEventListener("DOMContentLoaded", function () {
+            installGate();
+            triggerAuthCheck();
+        });
     } else {
         installGate();
+        triggerAuthCheck();
     }
 
     window.CardAuth = {
         current: function () { return state.card; },
         logout: logout,
+        start: startAppOnce,
         refresh: ensureAuthorized
     };
 })();

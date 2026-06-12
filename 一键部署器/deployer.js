@@ -133,22 +133,25 @@ function validatePayloadDir(ctx) {
   const html = fs.readFileSync(indexPath, 'utf8');
   const mode = creds.deployMode === 'card' ? 'card' : 'clean';
   const forbidden = [
-    'manualRoomInput',
-    'btnManualRoomConnect',
-    'btnAddQQGroup',
-    'copyGroupNumber',
-    '加入QQ群',
-    '连接房间</h3>',
+    'site_announcement',
+    'tryShowSiteAnnouncement',
+    'siteAnnounceOverlay',
+    'normal.js',
+    'reportIP',
+    'aHR0cDovL2xscXE1MjAueHl6',
+    'online_ip_count',
+    'client_online_heartbeat',
+    'game_servers',
   ];
   const hit = forbidden.find((item) => html.includes(item));
   if (hit) {
-    throw new Error(`payload 仍是旧页面，发现残留: ${hit}。请重启一键部署后台后再部署。`);
+    throw new Error(`payload 仍有远程弹窗或多余调用残留: ${hit}。请重启一键部署后台后再部署。`);
   }
-  if (!html.includes(`RADAR_LOGIN_MODE = window.RADAR_LOGIN_MODE || '${mode}'`)) {
+  if (creds.deployMode === 'card' && !html.includes('layui/auth.js')) {
+    throw new Error('卡密版 payload 缺少 layui/auth.js，不能部署未授权页面');
+  }
+  if (html.includes('RADAR_LOGIN_MODE') && !html.includes(`RADAR_LOGIN_MODE = window.RADAR_LOGIN_MODE || '${mode}'`)) {
     throw new Error(`payload 登录模式不正确，当前部署版本需要 ${mode}`);
-  }
-  if (!html.includes('RADAR_WS_SAME_ORIGIN = true')) {
-    throw new Error('payload 缺少 RADAR_WS_SAME_ORIGIN=true，新页面必须通过站点同端口 /ws 获取房间列表');
   }
 
   emit.log('info', `payload 校验通过: ${indexPath} (${Buffer.byteLength(html)} bytes)`);
@@ -959,7 +962,7 @@ function buildLicenseRuntimeConfig(creds) {
 function injectLicenseScriptTag(html) {
   const text = String(html || '');
   if (/radar-license\.js/i.test(text)) return text;
-  const tag = '<script src="/radar-license.js?v=20260611"></script>';
+  const tag = '<script src="/radar-license.js?v=20260612fix3"></script>';
   if (/<\/body>/i.test(text)) return text.replace(/<\/body>/i, `${tag}\n</body>`);
   return `${text}\n${tag}\n`;
 }
@@ -994,7 +997,8 @@ var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();
 var box=document.createElement('div');box.id='radarLicenseBlocker';box.style.cssText='position:fixed;inset:0;z-index:2147483647;background:rgba(4,8,18,.92);display:flex;align-items:center;justify-content:center;padding:18px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif;color:#e8eefc;';
 box.innerHTML='<div style="width:min(520px,94vw);background:#111827;border:1px solid rgba(96,165,250,.35);border-radius:14px;padding:24px;box-shadow:0 24px 70px rgba(0,0,0,.45);text-align:center"><h2 style="margin:0 0 12px;font-size:24px;color:#fef3c7">试用已结束，需要授权</h2><p style="margin:0 0 18px;line-height:1.7;color:#cbd5e1">'+esc(message||'未授权试用期为 1 天，试用结束后需要授权才能继续使用。')+'</p><p style="margin:0 0 20px;line-height:1.7;color:#dbeafe">请点击链接加入群聊【'+esc(cfg.groupName||'王者雷达共享开黑组队群')+'】，找我获取授权码。</p><a href="'+esc(cfg.groupUrl||'#')+'" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;justify-content:center;height:42px;padding:0 18px;border-radius:8px;background:#38bdf8;color:#06111f;font-weight:800;text-decoration:none">加入群聊找授权码</a></div>';
 document.body.appendChild(box);return false;}
-function allow(data){authorized=true;trialOpen=false;lastResult=data||{};var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();removeNotice();if(data&&data.permanent)savePermanent();return true;}
+function kickStart(){setTimeout(function(){try{if(window.CardAuth&&typeof window.CardAuth.refresh==='function'){window.CardAuth.refresh();setTimeout(function(){try{if(window.CardAuth&&typeof window.CardAuth.start==='function')window.CardAuth.start();else if(typeof nativeInitApp==='function')gated(nativeInitApp,window,[]);else if(typeof window.initApp==='function')window.initApp();else if(typeof nativeInitWebSocket==='function')gated(nativeInitWebSocket,window,[]);else if(typeof window.initWebSocket==='function')window.initWebSocket();}catch(e){}},300);return;}if(typeof nativeInitApp==='function')gated(nativeInitApp,window,[]);else if(typeof window.initApp==='function')window.initApp();else if(typeof nativeInitWebSocket==='function')gated(nativeInitWebSocket,window,[]);else if(typeof window.initWebSocket==='function')window.initWebSocket();}catch(e){}},0);}
+function allow(data){authorized=true;trialOpen=false;lastResult=data||{};var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();removeNotice();if(data&&data.permanent)savePermanent();kickStart();return true;}
 function allowTrial(data){lastResult=data||{};if(trialLeft()>0)return showTrialNotice(data&&data.message?data.message:'试用结束前请联系管理员授权。');return block(data&&data.message?data.message:'未授权试用已结束，需要授权后才能继续使用。');}
 function checkLicense(force){if(authorized&&!force)return Promise.resolve(true);if(cfg.permanent||readPermanent())return Promise.resolve(allow({permanent:true,local:true}));if(checking)return checking;
 var url=String(cfg.serverUrl||'').replace(/\\/+$/,'')+'/api/license/check?host='+encodeURIComponent(cfg.host||location.hostname||'')+'&domain='+encodeURIComponent(location.hostname||'')+'&mode='+encodeURIComponent(cfg.mode||'all')+'&_='+(Date.now());
@@ -1003,7 +1007,7 @@ return checking;}
 function gated(fn,ctx,args){if(authorized||trialOpen||cfg.permanent||readPermanent()||trialLeft()>0)return fn.apply(ctx,args);checkLicense(false).then(function(ok){if(ok)return fn.apply(ctx,args);});return undefined;}
 function wrap(){if(typeof window.initApp==='function'&&!window.initApp.__licenseWrapped){nativeInitApp=window.initApp;window.initApp=function(){return gated(nativeInitApp,this,arguments);};window.initApp.__licenseWrapped=true;}
 if(typeof window.initWebSocket==='function'&&!window.initWebSocket.__licenseWrapped){nativeInitWebSocket=window.initWebSocket;window.initWebSocket=function(){return gated(nativeInitWebSocket,this,arguments);};window.initWebSocket.__licenseWrapped=true;}}
-wrap();setTimeout(wrap,0);document.addEventListener('DOMContentLoaded',function(){wrap();checkLicense(false);});
+wrap();setTimeout(wrap,0);document.addEventListener('DOMContentLoaded',function(){wrap();checkLicense(false).then(function(ok){if(ok)kickStart();});});
 if(!cfg.permanent){setInterval(function(){checkLicense(true);},60000);setInterval(function(){if(!authorized&&trialLeft()<=0)block('未授权试用已结束，需要授权后才能继续使用。');else if(!authorized)showTrialNotice('试用结束前请联系管理员授权。');},300000);}
 window.RadarServerLicense={check:checkLicense,isAuthorized:function(){return authorized;},last:function(){return lastResult;},showBlock:block};
 })();`;

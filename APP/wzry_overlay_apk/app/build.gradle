@@ -15,8 +15,31 @@ def radarAppServerPort = (project.findProperty("APP_SERVER_PORT") ?: "8888").toS
 def radarAppFixed = (project.findProperty("APP_FIXED") ?: "false").toString().equalsIgnoreCase("true")
 def radarAppLoginMode = (project.findProperty("APP_LOGIN_MODE") ?: "auto").toString()
 def radarAppName = (project.findProperty("APP_NAME") ?: "ALin雷达").toString()
+def radarAppHomeTitle = (project.findProperty("APP_HOME_TITLE") ?: "MG Radar").toString()
+def radarAppPanelTitle = (project.findProperty("APP_PANEL_TITLE") ?: "MG内核内部版").toString()
+def radarAppPanelChannel = (project.findProperty("APP_PANEL_CHANNEL") ?: "SVIP10").toString()
+def radarAppPanelStatus = (project.findProperty("APP_PANEL_STATUS") ?: "游戏进程已初始化").toString()
 def radarAppIconFile = (project.findProperty("APP_ICON_FILE") ?: "").toString().trim()
 def radarAppBuyUrl = (project.findProperty("APP_BUY_URL") ?: "").toString().trim()
+def radarAppVersionName = (project.findProperty("APP_VERSION_NAME") ?: "v6.1.11").toString().trim()
+if (radarAppVersionName.length() == 0) {
+    radarAppVersionName = "v6.1.11"
+}
+def radarAppVersionCodeText = (project.findProperty("APP_VERSION_CODE") ?: "11").toString().trim()
+def radarAppVersionCode
+try {
+    radarAppVersionCode = Integer.parseInt(radarAppVersionCodeText)
+} catch (Exception ignored) {
+    throw new GradleException("APP_VERSION_CODE 必须是正整数: ${radarAppVersionCodeText}")
+}
+if (radarAppVersionCode <= 0) {
+    throw new GradleException("APP_VERSION_CODE 必须大于 0: ${radarAppVersionCode}")
+}
+def radarAppVersionNameLiteral = groovy.json.JsonOutput.toJson(radarAppVersionName)
+def radarAppHomeTitleLiteral = groovy.json.JsonOutput.toJson(radarAppHomeTitle)
+def radarAppPanelTitleLiteral = groovy.json.JsonOutput.toJson(radarAppPanelTitle)
+def radarAppPanelChannelLiteral = groovy.json.JsonOutput.toJson(radarAppPanelChannel)
+def radarAppPanelStatusLiteral = groovy.json.JsonOutput.toJson(radarAppPanelStatus)
 def radarConfigAssetsDir = layout.buildDirectory.dir("generated/radarConfig/assets")
 def radarBrandingResDir = layout.buildDirectory.dir("generated/radarBranding/res")
 def radarAppIconSource = radarAppIconFile.length() > 0 ? file(radarAppIconFile) : null
@@ -65,7 +88,13 @@ def generateRadarAppConfig = tasks.register("generateRadarAppConfig") {
     inputs.property("fixed", radarAppFixed)
     inputs.property("loginMode", radarAppLoginMode)
     inputs.property("appName", radarAppName)
+    inputs.property("homeTitle", radarAppHomeTitle)
+    inputs.property("panelTitle", radarAppPanelTitle)
+    inputs.property("panelChannel", radarAppPanelChannel)
+    inputs.property("panelStatus", radarAppPanelStatus)
     inputs.property("buyUrl", radarAppBuyUrl)
+    inputs.property("versionName", radarAppVersionName)
+    inputs.property("versionCode", radarAppVersionCode)
     doLast {
         def file = outputFile.get().asFile
         file.parentFile.mkdirs()
@@ -76,7 +105,13 @@ def generateRadarAppConfig = tasks.register("generateRadarAppConfig") {
             fixed: radarAppFixed,
             loginMode: radarAppLoginMode,
             appName: radarAppName,
-            buyUrl: radarAppBuyUrl
+            homeTitle: radarAppHomeTitle,
+            panelTitle: radarAppPanelTitle,
+            panelChannel: radarAppPanelChannel,
+            panelStatus: radarAppPanelStatus,
+            buyUrl: radarAppBuyUrl,
+            versionName: radarAppVersionName,
+            versionCode: radarAppVersionCode
         ]))
     }
 }
@@ -84,6 +119,10 @@ def generateRadarAppConfig = tasks.register("generateRadarAppConfig") {
 android {
     namespace "com.qy.wzryoverlay"
     compileSdk 35
+
+    buildFeatures {
+        buildConfig true
+    }
 
     signingConfigs {
         release {
@@ -100,8 +139,14 @@ android {
         applicationId "com.qy.wzryoverlay"
         minSdk 23
         targetSdk 35
-        versionCode 11
-        versionName "v6.1.11"
+        versionCode radarAppVersionCode
+        versionName radarAppVersionName
+        buildConfigField "int", "APP_VERSION_CODE", String.valueOf(radarAppVersionCode)
+        buildConfigField "String", "APP_VERSION_NAME", radarAppVersionNameLiteral
+        buildConfigField "String", "APP_HOME_TITLE", radarAppHomeTitleLiteral
+        buildConfigField "String", "APP_PANEL_TITLE", radarAppPanelTitleLiteral
+        buildConfigField "String", "APP_PANEL_CHANNEL", radarAppPanelChannelLiteral
+        buildConfigField "String", "APP_PANEL_STATUS", radarAppPanelStatusLiteral
         manifestPlaceholders = [
             appLabel: radarAppName,
             appIcon: radarHasCustomIcon ? "@mipmap/ic_launcher" : "@drawable/ic_radar",

@@ -2176,46 +2176,7 @@ if ($module !== '') {
         // { code:0, data:{ ip_count: 10 } } 或
         // { code:0, data:{ ws8888: 5 } }（已在后端去重）
         function fetchOnlineUserCount() {
-            try {
-                fetch('api/index.php?module=online_ip_count&_=' + Date.now(), {
-                    cache: 'no-store',
-                    credentials: 'include'
-                }).then(function(r){ 
-                    return r.json(); 
-                }).then(function(res){
-                    if (!res || res.code !== 0 || !res.data) return;
-                    var d = res.data || {};
-                    var total = 0;
-                    
-                    if (typeof d.total === 'number') {
-                        total = d.total;
-                    } else if (typeof d.total_ip === 'number') {
-                        total = d.total_ip;
-                    } else if (typeof d.ip_count === 'number') {
-                        total = d.ip_count;
-                    } else {
-                        if (typeof d.ws8888 === 'number') {
-                            total += d.ws8888;
-                        }
-                        if (typeof d['8888'] === 'number') {
-                            total += d['8888'];
-                        }
-                    }
-                    
-                    if (total < 0 || isNaN(total)) {
-                        return;
-                    }
-                    
-                    var userCountEl = document.getElementById('onlineUserCount');
-                    if (userCountEl) {
-                        userCountEl.textContent = total;
-                    }
-                }).catch(function(e){
-                    console.warn('获取在线人数失败:', e);
-                });
-            } catch(e) {
-                console.warn('获取在线人数异常:', e);
-            }
+            // Online count polling disabled.
         }
         function getWebSocketProtocol() {
             var protocol = window.location.protocol;
@@ -4566,49 +4527,8 @@ if ($module !== '') {
         }
 
         function loadGameServersForFront() {
-            fetch('/api/index.php?module=game_servers&action=public', { credentials: 'include', cache: 'no-store' })
-                .then(function(resp) { return resp.json(); })
-                .then(function(res) {
-                    var list = res && res.data && Array.isArray(res.data.list) ? res.data.list : [];
-                    var mapped = (res && res.code === 0 && list.length) ? list : [];
-                    mapped = mapped.map(function(server) {
-                        return {
-                            id: server.id,
-                            name: server.name || '',
-                            host: normalizeGameServerAddress(server.host, server.port),
-                            port: server.port || 8888,
-                            last_check_status: server.last_check_status || '',
-                            last_check_at: server.last_check_at || ''
-                        };
-                    }).filter(function(server) {
-                        return !!server.host;
-                    });
-                    var defaults = getDefaultGameServers();
-                    var seen = {};
-                    gameServers = [];
-                    defaults.concat(mapped).forEach(function(server, index) {
-                        var host = normalizeGameServerAddress(server.host, server.port);
-                        if (!host || seen[host]) return;
-                        seen[host] = true;
-                        gameServers.push({
-                            id: server.id || ('server-' + index),
-                            name: server.name || (host === defaultGameServer ? '本服务器' : ('服务器' + index)),
-                            host: host,
-                            port: server.port || 8888
-                        });
-                    });
-                    gameServers.sort(function(a, b) {
-                        if (a.host === defaultGameServer) return -1;
-                        if (b.host === defaultGameServer) return 1;
-                        return 0;
-                    });
-                    if (!gameServers.length) gameServers = getDefaultGameServers();
-                    startRoomListSockets();
-                })
-                .catch(function() {
-                    gameServers = getDefaultGameServers();
-                    startRoomListSockets();
-                });
+            gameServers = getDefaultGameServers();
+            startRoomListSockets();
         }
 
         function setupWebSocketHandlers() {
@@ -5497,17 +5417,8 @@ if ($module !== '') {
         }
 
         function sendClientOnlineHeartbeat(){
-            try {
-                fetch('api/index.php?module=client_online_heartbeat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
-                    body: JSON.stringify({ client: 'web' })
-                }).catch(function(){});
-            } catch(e) {}
+            // Online heartbeat disabled.
         }
-        sendClientOnlineHeartbeat();
-        setInterval(sendClientOnlineHeartbeat, 30000);
     </script>
 </body>
 </html>

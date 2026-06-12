@@ -68,9 +68,9 @@ public class MainActivity extends Activity {
     private static final String DEFAULT_SERVER_HOST = "你的域名或新服务器IP";
     private static final int DEFAULT_SERVER_PORT = 8888;
     // ======================
-    private static final int CURRENT_VERSION_CODE = 11;
+    private static final int CURRENT_VERSION_CODE = BuildConfig.APP_VERSION_CODE;
     private static final int REQUEST_MEDIA_PROJECTION = 5001;
-    private static final String CURRENT_VERSION_NAME = "v6.1.11";
+    private static final String CURRENT_VERSION_NAME = BuildConfig.APP_VERSION_NAME;
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
     private static final int DEFAULT_FPS = 90;
     private static final int[] FPS_VALUES = new int[]{60, 90, 120, 144};
@@ -121,6 +121,7 @@ public class MainActivity extends Activity {
     private boolean loggedIn;
     private boolean secureMode;
     private boolean pendingOverlayStart;
+    private boolean pendingAutoFitCapture;
     private boolean updateBlocked;
     private boolean booting;
     private boolean loadingRooms;
@@ -183,6 +184,14 @@ public class MainActivity extends Activity {
         showStartupPage();
         if (isFrontendOnlyMode()) enterWithoutLogin("纯前端模式，已免登录进入主页");
         else checkRemoteConfig(false, false);
+        handleAutoFitIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleAutoFitIntent(intent);
     }
 
     @Override
@@ -192,6 +201,12 @@ public class MainActivity extends Activity {
         if (pendingOverlayStart && (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this))) {
             pendingOverlayStart = false;
             startOverlay();
+        }
+    }
+
+    private void handleAutoFitIntent(Intent intent) {
+        if (intent != null && intent.getBooleanExtra("request_auto_fit_capture", false)) {
+            requestAutoFitCapture();
         }
     }
 
@@ -338,6 +353,10 @@ public class MainActivity extends Activity {
     }
 
     private void showRadarPage() {
+        if (useMgRadarUi()) {
+            showMgRadarPageFixed();
+            return;
+        }
         LinearLayout root = createPlainRoot("王者荣耀小地图");
         showUpdateNotes();
 
@@ -380,23 +399,6 @@ public class MainActivity extends Activity {
         roomListRow.addView(roomListScroll, new LinearLayout.LayoutParams(0, -2, 1));
         root.addView(roomListRow, lpTop(-2, 6));
 
-        fpsSpinner = new Spinner(this);
-        ArrayAdapter<String> fpsAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"60 FPS", "90 FPS", "120 FPS", "144 FPS"});
-        fpsAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        fpsSpinner.setAdapter(fpsAdapter);
-        fpsSpinner.setSelection(fpsIndexFor(prefs.getInt("radar_fps", DEFAULT_FPS)));
-        fpsSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                saveSelectedFps(fpsFromIndex(position));
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-            }
-        });
-        root.addView(fpsSpinner, lpTop(54, 12));
-
         connectRoomButton = makeButton(connectRoomButtonText());
         connectRoomButton.setOnClickListener(v -> startOverlay());
         root.addView(connectRoomButton, lpTop(48, 12));
@@ -420,7 +422,7 @@ public class MainActivity extends Activity {
         }), lpTop(-2, 20));
 
         Button capturePermBtn = makeButton(NativeOverlayService.sProjectionData != null ? "截屏权限已授权 ✓" : "授权截屏(一键适配)");
-        capturePermBtn.setOnClickListener(v -> requestScreenCapture());
+capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
         root.addView(capturePermBtn, lpTop(46, 10));
 
         statusText = status(root);
@@ -428,6 +430,246 @@ public class MainActivity extends Activity {
         startOnlineHeartbeat();
         if (fixedBundledServer) loadBundledServerOnly();
         else loadPublicServers();
+    }
+
+    private boolean useMgRadarUi() {
+        return true;
+    }
+
+    private void showMgRadarPage() {
+        LinearLayout root = createPlainRoot(BuildConfig.APP_HOME_TITLE);
+        showUpdateNotes();
+
+        LinearLayout nav = new LinearLayout(this);
+        nav.setOrientation(LinearLayout.HORIZONTAL);
+        nav.setPadding(dp(4), dp(4), dp(4), dp(4));
+        nav.setBackground(makeStrokeBox(0xaa07111f, 0xff38bdf8, dp(18)));
+        nav.addView(mgNavButton("绘制", this::startOverlay), new LinearLayout.LayoutParams(0, dp(34), 1));
+        nav.addView(mgNavButton("设置", this::showThemeDialog), new LinearLayout.LayoutParams(0, dp(34), 1));
+        nav.addView(mgNavButton("触摸", () -> {
+            setOverlayAdjustMode(true);
+            setStatus("已打开悬浮窗调节");
+        }), new LinearLayout.LayoutParams(0, dp(34), 1));
+        nav.addView(mgNavButton("基础", this::refreshAllRooms), new LinearLayout.LayoutParams(0, dp(34), 1));
+        nav.addView(mgNavButton("菜单", this::showMainMenu), new LinearLayout.LayoutParams(0, dp(34), 1));
+        root.addView(nav, lpTop(-2, 14));
+
+        LinearLayout roomCard = mgSection(root, "房间共享", "选择房间并刷新共享数据");
+        LinearLayout roomSelectRow = new LinearLayout(this);
+        roomSelectRow.setOrientation(LinearLayout.HORIZONTAL);
+        roomSelectButton = makeSmallButton(roomSelectLabel(), this::toggleRoomList);
+        roomSelectButton.setGravity(Gravity.CENTER_VERTICAL);
+        roomSelectButton.setPadding(dp(12), 0, dp(12), 0);
+        roomSelectButton.setTextSize(14);
+        roomSelectRow.addView(roomSelectButton, new LinearLayout.LayoutParams(0, dp(54), 1));
+        roomCountBadge = label("0间");
+        roomCountBadge.setGravity(Gravity.CENTER);
+        roomCountBadge.setTextColor(primaryText);
+        roomCountBadge.setTextSize(13);
+        LinearLayout.LayoutParams countLp = new LinearLayout.LayoutParams(dp(52), dp(54));
+        countLp.leftMargin = dp(8);
+        roomSelectRow.addView(roomCountBadge, countLp);
+        roomArrowButton = makeSmallButton("v", this::toggleRoomList);
+        LinearLayout.LayoutParams arrowLp = new LinearLayout.LayoutParams(dp(50), dp(54));
+        arrowLp.leftMargin = dp(8);
+        roomSelectRow.addView(roomArrowButton, arrowLp);
+        Button refreshRoomsButton = makeSmallButton("刷新", this::refreshAllRooms);
+        LinearLayout.LayoutParams refreshLp = new LinearLayout.LayoutParams(dp(62), dp(54));
+        refreshLp.leftMargin = dp(8);
+        roomSelectRow.addView(refreshRoomsButton, refreshLp);
+        roomCard.addView(roomSelectRow, lpTop(-2, 10));
+
+        LinearLayout roomListRow = new LinearLayout(this);
+        roomListRow.setOrientation(LinearLayout.HORIZONTAL);
+        roomListRow.setGravity(Gravity.TOP);
+        roomListScroll = new ScrollView(this);
+        roomListScroll.setFillViewport(false);
+        roomListScroll.setNestedScrollingEnabled(true);
+        roomListScroll.setVisibility(View.GONE);
+        roomListScroll.setBackground(makeStrokeBox(0x33020617, 0x6638bdf8, dp(10)));
+        roomListContent = new LinearLayout(this);
+        roomListContent.setOrientation(LinearLayout.VERTICAL);
+        roomListContent.setPadding(dp(5), dp(5), dp(5), dp(5));
+        roomListScroll.addView(roomListContent, new ScrollView.LayoutParams(-1, -2));
+        roomListRow.addView(roomListScroll, new LinearLayout.LayoutParams(0, -2, 1));
+        roomCard.addView(roomListRow, lpTop(-2, 6));
+
+        LinearLayout drawCard = mgSection(root, "绘制控制", "启动雷达、帧率、兵线和技能显示");
+        connectRoomButton = makeButton(connectRoomButtonText());
+        connectRoomButton.setOnClickListener(v -> startOverlay());
+        drawCard.addView(connectRoomButton, lpTop(46, 10));
+        updateConnectRoomButton();
+
+        minionFixButton = makeButton(minionFixText());
+        minionFixButton.setOnClickListener(v -> cycleMinionLaneFix());
+        applyMinionFixButtonStyle();
+        drawCard.addView(minionFixButton, lpTop(46, 10));
+
+        drawCard.addView(switchRow("显示技能状态", "开启后在小地图右侧显示英雄大招和技能状态", prefs.getBoolean("show_skill_panel", true), on -> {
+            prefs.edit().putBoolean("show_skill_panel", on).apply();
+            setOverlaySkillPanel(on);
+            setStatus(on ? "技能状态已显示" : "技能状态已隐藏");
+        }), lpTop(-2, 16));
+        drawCard.addView(switchRow("防截图", "开启后悬浮窗内容不会被截图捕获", secureMode, on -> {
+            secureMode = on;
+            prefs.edit().putBoolean("secure_mode", secureMode).apply();
+            applySecureMode();
+            setStatus(secureMode ? "防截图已开启" : "防截图已关闭");
+        }), lpTop(-2, 12));
+
+        LinearLayout toolCard = mgSection(root, "校准工具", "适配小地图、调节悬浮窗和复位绘制");
+        Button capturePermBtn = makeButton(NativeOverlayService.sProjectionData != null ? "截屏权限已授权" : "授权截屏 / 一键适配");
+capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
+        toolCard.addView(capturePermBtn, lpTop(46, 10));
+
+        LinearLayout toolRow = new LinearLayout(this);
+        toolRow.setOrientation(LinearLayout.HORIZONTAL);
+        toolRow.addView(makeSmallButton("悬浮调节", () -> {
+            setOverlayAdjustMode(true);
+            setStatus("已打开悬浮窗调节");
+        }), new LinearLayout.LayoutParams(0, dp(42), 1));
+        LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(0, dp(42), 1);
+        resetLp.leftMargin = dp(8);
+        toolRow.addView(makeSmallButton("复位绘制", this::resetOverlay), resetLp);
+        LinearLayout.LayoutParams themeLp = new LinearLayout.LayoutParams(0, dp(42), 1);
+        themeLp.leftMargin = dp(8);
+        toolRow.addView(makeSmallButton("主题", this::showThemeDialog), themeLp);
+        toolCard.addView(toolRow, lpTop(-2, 10));
+
+        statusText = status(root);
+        setStatus("正在读取房间...");
+        startOnlineHeartbeat();
+        if (fixedBundledServer) loadBundledServerOnly();
+        else loadPublicServers();
+    }
+
+    private LinearLayout mgSection(LinearLayout root, String titleText, String subtitleText) {
+        LinearLayout card = section(root);
+        TextView title = label(titleText);
+        title.setTextColor(primaryText);
+        title.setTextSize(18);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        card.addView(title, new LinearLayout.LayoutParams(-1, -2));
+        TextView subtitle = label(subtitleText);
+        subtitle.setTextSize(12);
+        subtitle.setPadding(0, dp(4), 0, dp(2));
+        card.addView(subtitle, new LinearLayout.LayoutParams(-1, -2));
+        return card;
+    }
+
+    private void showMgRadarPageFixed() {
+        LinearLayout root = createPlainRoot(BuildConfig.APP_HOME_TITLE);
+        showUpdateNotes();
+
+        LinearLayout nav = new LinearLayout(this);
+        nav.setOrientation(LinearLayout.HORIZONTAL);
+        nav.setPadding(dp(4), dp(4), dp(4), dp(4));
+        nav.setBackground(makeStrokeBox(0xaa07111f, 0xff38bdf8, dp(18)));
+        nav.addView(mgNavButton("\u7ed8\u5236", this::startOverlay), new LinearLayout.LayoutParams(0, dp(34), 1));
+        nav.addView(mgNavButton("\u8bbe\u7f6e", this::showThemeDialog), new LinearLayout.LayoutParams(0, dp(34), 1));
+        nav.addView(mgNavButton("\u89e6\u6478", () -> {
+            setOverlayAdjustMode(true);
+            setStatus("\u5df2\u6253\u5f00\u60ac\u6d6e\u7a97\u8c03\u8282");
+        }), new LinearLayout.LayoutParams(0, dp(34), 1));
+        nav.addView(mgNavButton("\u57fa\u7840", this::refreshAllRooms), new LinearLayout.LayoutParams(0, dp(34), 1));
+        nav.addView(mgNavButton("\u83dc\u5355", this::showMainMenu), new LinearLayout.LayoutParams(0, dp(34), 1));
+        root.addView(nav, lpTop(-2, 14));
+
+        LinearLayout roomCard = mgSection(root, "\u623f\u95f4\u5171\u4eab", "\u9009\u62e9\u623f\u95f4\u5e76\u5237\u65b0\u5171\u4eab\u6570\u636e");
+        LinearLayout roomSelectRow = new LinearLayout(this);
+        roomSelectRow.setOrientation(LinearLayout.HORIZONTAL);
+        roomSelectButton = makeSmallButton(roomSelectLabel(), this::toggleRoomList);
+        roomSelectButton.setGravity(Gravity.CENTER_VERTICAL);
+        roomSelectButton.setPadding(dp(12), 0, dp(12), 0);
+        roomSelectButton.setTextSize(14);
+        roomSelectRow.addView(roomSelectButton, new LinearLayout.LayoutParams(0, dp(54), 1));
+        roomCountBadge = label("0\u95f4");
+        roomCountBadge.setGravity(Gravity.CENTER);
+        roomCountBadge.setTextColor(primaryText);
+        roomCountBadge.setTextSize(13);
+        LinearLayout.LayoutParams countLp = new LinearLayout.LayoutParams(dp(52), dp(54));
+        countLp.leftMargin = dp(8);
+        roomSelectRow.addView(roomCountBadge, countLp);
+        roomArrowButton = makeSmallButton("v", this::toggleRoomList);
+        LinearLayout.LayoutParams arrowLp = new LinearLayout.LayoutParams(dp(50), dp(54));
+        arrowLp.leftMargin = dp(8);
+        roomSelectRow.addView(roomArrowButton, arrowLp);
+        Button refreshRoomsButton = makeSmallButton("\u5237\u65b0", this::refreshAllRooms);
+        LinearLayout.LayoutParams refreshLp = new LinearLayout.LayoutParams(dp(62), dp(54));
+        refreshLp.leftMargin = dp(8);
+        roomSelectRow.addView(refreshRoomsButton, refreshLp);
+        roomCard.addView(roomSelectRow, lpTop(-2, 10));
+
+        LinearLayout roomListRow = new LinearLayout(this);
+        roomListRow.setOrientation(LinearLayout.HORIZONTAL);
+        roomListRow.setGravity(Gravity.TOP);
+        roomListScroll = new ScrollView(this);
+        roomListScroll.setFillViewport(false);
+        roomListScroll.setNestedScrollingEnabled(true);
+        roomListScroll.setVisibility(View.GONE);
+        roomListScroll.setBackground(makeStrokeBox(0x33020617, 0x6638bdf8, dp(10)));
+        roomListContent = new LinearLayout(this);
+        roomListContent.setOrientation(LinearLayout.VERTICAL);
+        roomListContent.setPadding(dp(5), dp(5), dp(5), dp(5));
+        roomListScroll.addView(roomListContent, new ScrollView.LayoutParams(-1, -2));
+        roomListRow.addView(roomListScroll, new LinearLayout.LayoutParams(0, -2, 1));
+        roomCard.addView(roomListRow, lpTop(-2, 6));
+
+        LinearLayout drawCard = mgSection(root, "\u7ed8\u5236\u63a7\u5236", "\u542f\u52a8\u96f7\u8fbe\u3001\u5175\u7ebf\u548c\u6280\u80fd\u663e\u793a");
+        connectRoomButton = makeButton(connectRoomButtonText());
+        connectRoomButton.setOnClickListener(v -> startOverlay());
+        drawCard.addView(connectRoomButton, lpTop(46, 10));
+        updateConnectRoomButton();
+
+        minionFixButton = makeButton(minionFixText());
+        minionFixButton.setOnClickListener(v -> cycleMinionLaneFix());
+        applyMinionFixButtonStyle();
+        drawCard.addView(minionFixButton, lpTop(46, 10));
+
+        drawCard.addView(switchRow("\u663e\u793a\u6280\u80fd\u72b6\u6001", "\u5f00\u542f\u540e\u5728\u5c0f\u5730\u56fe\u53f3\u4fa7\u663e\u793a\u82f1\u96c4\u5927\u62db\u548c\u6280\u80fd\u72b6\u6001", prefs.getBoolean("show_skill_panel", true), on -> {
+            prefs.edit().putBoolean("show_skill_panel", on).apply();
+            setOverlaySkillPanel(on);
+            setStatus(on ? "\u6280\u80fd\u72b6\u6001\u5df2\u663e\u793a" : "\u6280\u80fd\u72b6\u6001\u5df2\u9690\u85cf");
+        }), lpTop(-2, 16));
+        drawCard.addView(switchRow("\u9632\u622a\u56fe", "\u5f00\u542f\u540e\u60ac\u6d6e\u7a97\u5185\u5bb9\u4e0d\u4f1a\u88ab\u622a\u56fe\u6355\u83b7", secureMode, on -> {
+            secureMode = on;
+            prefs.edit().putBoolean("secure_mode", secureMode).apply();
+            applySecureMode();
+            setStatus(secureMode ? "\u9632\u622a\u56fe\u5df2\u5f00\u542f" : "\u9632\u622a\u56fe\u5df2\u5173\u95ed");
+        }), lpTop(-2, 12));
+
+        LinearLayout toolCard = mgSection(root, "\u6821\u51c6\u5de5\u5177", "\u9002\u914d\u5c0f\u5730\u56fe\u3001\u8c03\u8282\u60ac\u6d6e\u7a97\u548c\u590d\u4f4d\u7ed8\u5236");
+        Button capturePermBtn = makeButton(NativeOverlayService.sProjectionData != null ? "\u622a\u5c4f\u6743\u9650\u5df2\u6388\u6743" : "\u6388\u6743\u622a\u5c4f / \u4e00\u952e\u9002\u914d");
+        capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
+        toolCard.addView(capturePermBtn, lpTop(46, 10));
+
+        LinearLayout toolRow = new LinearLayout(this);
+        toolRow.setOrientation(LinearLayout.HORIZONTAL);
+        toolRow.addView(makeSmallButton("\u60ac\u6d6e\u8c03\u8282", () -> {
+            setOverlayAdjustMode(true);
+            setStatus("\u5df2\u6253\u5f00\u60ac\u6d6e\u7a97\u8c03\u8282");
+        }), new LinearLayout.LayoutParams(0, dp(42), 1));
+        LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(0, dp(42), 1);
+        resetLp.leftMargin = dp(8);
+        toolRow.addView(makeSmallButton("\u590d\u4f4d\u7ed8\u5236", this::resetOverlay), resetLp);
+        LinearLayout.LayoutParams themeLp = new LinearLayout.LayoutParams(0, dp(42), 1);
+        themeLp.leftMargin = dp(8);
+        toolRow.addView(makeSmallButton("\u4e3b\u9898", this::showThemeDialog), themeLp);
+        toolCard.addView(toolRow, lpTop(-2, 10));
+
+        statusText = status(root);
+        setStatus("\u6b63\u5728\u8bfb\u53d6\u623f\u95f4...");
+        startOnlineHeartbeat();
+        if (fixedBundledServer) loadBundledServerOnly();
+        else loadPublicServers();
+    }
+
+    private Button mgNavButton(String text, Runnable action) {
+        Button button = makeSmallButton(text, action);
+        button.setTextSize(12);
+        button.setTextColor(0xffffffff);
+        button.setBackground(makeStrokeBox(0x2215d1e8, 0x6638bdf8, dp(14)));
+        return button;
     }
 
     private void addThemeMenu(LinearLayout root) {
@@ -1209,14 +1451,35 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void requestAutoFitCapture() {
+        if (NativeOverlayService.sProjectionData != null) {
+            triggerAutoFitCapture();
+            return;
+        }
+        pendingAutoFitCapture = true;
+        requestScreenCapture();
+    }
+
+    private void triggerAutoFitCapture() {
+        Intent intent = new Intent(this, NativeOverlayService.class);
+        intent.setAction(NativeOverlayService.ACTION_AUTO_FIT_CAPTURE);
+        startService(intent);
+        setStatus("正在截屏识别小地图...");
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQUEST_MEDIA_PROJECTION && resultCode == RESULT_OK && data != null) {
             NativeOverlayService.sProjectionResultCode = resultCode;
             NativeOverlayService.sProjectionData = data;
+            if (pendingAutoFitCapture) {
+                pendingAutoFitCapture = false;
+                triggerAutoFitCapture();
+            }
             setStatus("截屏权限已授权，可使用一键适配");
         } else if (requestCode == REQUEST_MEDIA_PROJECTION) {
+            pendingAutoFitCapture = false;
             setStatus("截屏权限被拒绝");
         }
     }
@@ -1308,7 +1571,7 @@ public class MainActivity extends Activity {
     }
 
     private int selectedFps() {
-        return fpsSpinner == null ? prefs.getInt("radar_fps", DEFAULT_FPS) : fpsFromIndex(fpsSpinner.getSelectedItemPosition());
+        return DEFAULT_FPS;
     }
 
     private int fpsFromIndex(int index) {

@@ -1681,22 +1681,25 @@ function validateLocalPayloadForMode(mode) {
   const html = fs.readFileSync(indexPath, 'utf8');
   const expectedMode = mode === 'card' ? 'card' : 'clean';
   const forbidden = [
-    'manualRoomInput',
-    'btnManualRoomConnect',
-    'btnAddQQGroup',
-    'copyGroupNumber',
-    '加入QQ群',
-    '连接房间</h3>',
+    'site_announcement',
+    'tryShowSiteAnnouncement',
+    'siteAnnounceOverlay',
+    'normal.js',
+    'reportIP',
+    'aHR0cDovL2xscXE1MjAueHl6',
+    'online_ip_count',
+    'client_online_heartbeat',
+    'game_servers',
   ];
   const hit = forbidden.find((item) => html.includes(item));
   if (hit) {
-    return { ok: false, message: `本地 payload 仍是旧页面，发现残留: ${hit}。请重启一键部署后台后再部署。` };
+    return { ok: false, message: `本地 payload 仍有远程弹窗或多余调用残留: ${hit}。请重启一键部署后台后再部署。` };
   }
-  if (!html.includes(`RADAR_LOGIN_MODE = window.RADAR_LOGIN_MODE || '${expectedMode}'`)) {
+  if (mode === 'card' && !html.includes('layui/auth.js')) {
+    return { ok: false, message: '卡密版 payload 缺少 layui/auth.js，不能部署未授权页面' };
+  }
+  if (html.includes('RADAR_LOGIN_MODE') && !html.includes(`RADAR_LOGIN_MODE = window.RADAR_LOGIN_MODE || '${expectedMode}'`)) {
     return { ok: false, message: `本地 payload 登录模式不正确，需要 ${expectedMode}` };
-  }
-  if (!html.includes('RADAR_WS_SAME_ORIGIN = true')) {
-    return { ok: false, message: '本地 payload 缺少 RADAR_WS_SAME_ORIGIN=true，必须通过站点同端口 /ws 获取房间列表' };
   }
   return { ok: true };
 }
@@ -1729,12 +1732,21 @@ function connectRemote(conn, creds) {
       else resolve();
     };
     conn.once('ready', () => done());
-    conn.once('error', (err) => done(err));
+    conn.once('error', (err) => {
+      if (err && /All configured authentication methods failed/i.test(err.message || '')) {
+        err.message = 'SSH认证失败：请检查服务器账号、SSH密码、端口，或确认目标服务器允许密码登录';
+      }
+      done(err);
+    });
+    conn.on('keyboard-interactive', (_name, _instructions, _lang, _prompts, finish) => {
+      finish([creds.password]);
+    });
     conn.connect({
       host: creds.host,
       port: creds.port,
       username: creds.username,
       password: creds.password,
+      tryKeyboard: true,
       readyTimeout: 12000,
     });
   });

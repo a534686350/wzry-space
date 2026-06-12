@@ -1225,6 +1225,27 @@ case 'ip_username':
     break;
 
 // ---------- WebSocket 房间上报（home_server -> 后台在线状态） ----------
+case 'online_ip_count':
+    try {
+        $total = 0;
+        try {
+            $threshold = date('Y-m-d H:i:s', time() - 120);
+            $stmt = $pdo->prepare("SELECT COUNT(DISTINCT ip) FROM client_online WHERE updated_at >= ?");
+            $stmt->execute([$threshold]);
+            $total = (int) $stmt->fetchColumn();
+        } catch (PDOException $e) {
+            $total = 0;
+        }
+        apiJsonResp(0, 'ok', ['total' => $total, 'ip_count' => $total]);
+    } catch (Throwable $e) {
+        apiJsonResp(0, 'ok', ['total' => 0, 'ip_count' => 0]);
+    }
+    break;
+
+case 'online_heartbeat':
+    apiJsonResp(0, 'ok');
+    break;
+
 case 'room_report':
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         apiJsonResp(405, '请使用 POST');
@@ -2930,28 +2951,17 @@ case 'app_remote_config':
 case 'game_servers':
     ensureGameServersTable($pdo);
     if ($action === 'public' || $action === 'list_public' || $action === '') {
-        $publicOnly = isset($_GET['public_account']) && (int) $_GET['public_account'] === 1;
-        $where = $publicOnly ? 'enabled = 1 AND public_account_visible = 1' : 'enabled = 1';
-        $stmt = $pdo->query('SELECT id, name, host, port, last_check_status, last_check_at FROM game_servers WHERE ' . $where . ' ORDER BY sort_order ASC, id ASC');
-        $servers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        $list = [];
-        $upd = $pdo->prepare('UPDATE game_servers SET last_check_status = ?, last_check_at = NOW(), last_check_ms = ?, last_check_error = ? WHERE id = ?');
-        foreach ($servers as $server) {
-            $status = (string) ($server['last_check_status'] ?? '');
-            $lastCheckAt = isset($server['last_check_at']) ? strtotime((string) $server['last_check_at']) : 0;
-            if ($status === 'online' && $lastCheckAt && time() - $lastCheckAt <= 10) {
-                $list[] = $server;
-                continue;
-            }
-            $result = testGameServerWebSocket($server['host'] ?? '', $server['port'] ?? 8888, 0.8);
-            $upd->execute([$result['status'], $result['ms'], $result['error'], (int) $server['id']]);
-            if ($result['status'] === 'online') {
-                $server['last_check_status'] = 'online';
-                $server['last_check_at'] = date('Y-m-d H:i:s');
-                $list[] = $server;
-            }
-        }
-        apiJsonResp(0, 'ok', ['list' => $list]);
+        $host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? '';
+        $host = preg_replace('/:\d+$/', '', trim((string) $host));
+        if ($host === '') $host = getClientIp();
+        apiJsonResp(0, 'ok', ['list' => [[
+            'id' => 'local',
+            'name' => '本服务器',
+            'host' => $host,
+            'port' => 8888,
+            'last_check_status' => '',
+            'last_check_at' => '',
+        ]]]);
         break;
     }
     if ($action === 'app_report') {

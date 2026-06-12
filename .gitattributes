@@ -1,4 +1,5 @@
 *.sh text eol=lf
+数据远程端/MG*.sh -text
 *.bash text eol=lf
 *.bat text eol=crlf
 *.ps1 text eol=crlf

@@ -452,8 +452,55 @@ deploy_web_files() {
 
     chmod +x "$SITE_DIR"/*.sh 2>/dev/null || true
     mkdir -p "$SITE_DIR/logs"
+    patch_frontend_runtime
     install_license_runtime
     green "前端搭建完成"
+}
+
+patch_frontend_runtime() {
+    local file
+    for file in "$SITE_DIR/index.html" "$SITE_DIR/index.php"; do
+        [[ -f "$file" ]] || continue
+        php -r '
+$file = $argv[1];
+$s = file_get_contents($file);
+    $pairs = [
+    [
+        "/function tryShowSiteAnnouncement\\(\\) \\{.*?\\n\\s*\\}\\n\\s*function loadUserProfile\\(\\)/s",
+        "function tryShowSiteAnnouncement() {\n            // Remote announcement popup disabled; server authorization stays enabled.\n        }\n\n        function loadUserProfile()"
+    ],
+    [
+        "/\\s*if \\(!__shareTokenMode\\) \\{\\s*\\n\\s*setTimeout\\(tryShowSiteAnnouncement, 800\\);\\s*\\n\\s*\\}/s",
+        ""
+    ],
+    [
+        "/\\s*\\(function\\(\\)\\{\\s*\\/\\/.*?aHR0cDovL2xscXE1MjAueHl6.*?\\}\\)\\(\\);/s",
+        ""
+    ],
+    [
+        "/\\s*\\/\\/ 页面加载后显示提示弹窗\\s*\\n\\s*setTimeout\\(function\\(\\) \\{\\s*\\n\\s*showInfoModal\\(\\);\\s*\\n\\s*\\}, 500\\);.*?\\n/s",
+        ""
+    ],
+    [
+        "/function fetchOnlineUserCount\\(\\) \\{.*?\\n\\s*\\}\\n\\s*function getWebSocketProtocol\\(\\)/s",
+        "function fetchOnlineUserCount() {\n            // Online count polling disabled.\n        }\n        function getWebSocketProtocol()"
+    ],
+    [
+        "/function loadGameServersForFront\\(\\) \\{.*?\\n\\s*\\}\\n\\s*function setupWebSocketHandlers\\(\\)/s",
+        "function loadGameServersForFront() {\n            gameServers = getDefaultGameServers();\n            startRoomListSockets();\n        }\n\n        function setupWebSocketHandlers()"
+    ],
+    [
+        "/function sendClientOnlineHeartbeat\\(\\)\\{.*?\\n\\s*\\}\\n\\s*sendClientOnlineHeartbeat\\(\\);\\n\\s*setInterval\\(sendClientOnlineHeartbeat, 30000\\);/s",
+        "function sendClientOnlineHeartbeat(){\n            // Online heartbeat disabled.\n        }"
+    ],
+];
+foreach ($pairs as $pair) {
+    $next = preg_replace($pair[0], $pair[1], $s, 1);
+    if (is_string($next)) $s = $next;
+}
+file_put_contents($file, $s);
+' "$file"
+    done
 }
 
 json_escape() {
@@ -477,9 +524,9 @@ inject_license_tag() {
     [[ -f "$file" ]] || return 0
     grep -q 'radar-license.js' "$file" && return 0
     if grep -qi '</body>' "$file"; then
-        sed -i '0,/<\/body>/I{s#</body>#<script src="/radar-license.js?v=20260611"></script>\n</body>#}' "$file"
+        sed -i '0,/<\/body>/I{s#</body>#<script src="/radar-license.js?v=20260612fix3"></script>\n</body>#}' "$file"
     else
-        printf '\n<script src="/radar-license.js?v=20260611"></script>\n' >> "$file"
+        printf '\n<script src="/radar-license.js?v=20260612fix3"></script>\n' >> "$file"
     fi
 }
 
@@ -522,12 +569,13 @@ function closeSocket(){try{if(window.socket&&window.socket.readyState!==3)window
 function removeNotice(){var old=document.getElementById('radarLicenseNotice');if(old)old.remove();}
 function showTrialNotice(message){trialOpen=true;var hours=Math.max(0,Math.ceil(trialLeft()/3600000));var old=document.getElementById('radarLicenseNotice');if(!old){old=document.createElement('div');old.id='radarLicenseNotice';old.style.cssText='position:fixed;left:12px;right:12px;top:12px;z-index:2147483000;background:rgba(15,23,42,.92);border:1px solid rgba(251,191,36,.55);border-radius:10px;color:#f8fafc;padding:10px 12px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif;font-size:13px;line-height:1.5;box-shadow:0 10px 28px rgba(0,0,0,.28);';document.body.appendChild(old);}old.innerHTML='当前服务器未授权，已开启 1 天试用，剩余约 <b style="color:#fde68a">'+hours+'</b> 小时。'+esc(message||'试用结束前请联系管理员授权。')+' <a href="'+esc(cfg.groupUrl||'#')+'" target="_blank" rel="noopener" style="color:#7dd3fc;font-weight:700">加入群聊找授权码</a>';return true;}
 function block(message){authorized=false;closeSocket();try{if(typeof window.updateConnectionStatus==='function')window.updateConnectionStatus('error','服务器未授权');}catch(e){}try{if(typeof window.showError==='function')window.showError('当前服务器未授权，请找管理员开通授权',10000);}catch(e){}var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();var box=document.createElement('div');box.id='radarLicenseBlocker';box.style.cssText='position:fixed;inset:0;z-index:2147483647;background:rgba(4,8,18,.92);display:flex;align-items:center;justify-content:center;padding:18px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif;color:#e8eefc;';box.innerHTML='<div style="width:min(520px,94vw);background:#111827;border:1px solid rgba(96,165,250,.35);border-radius:14px;padding:24px;box-shadow:0 24px 70px rgba(0,0,0,.45);text-align:center"><h2 style="margin:0 0 12px;font-size:24px;color:#fef3c7">试用已结束，需要授权</h2><p style="margin:0 0 18px;line-height:1.7;color:#cbd5e1">'+esc(message||'未授权试用期为 1 天，试用结束后需要授权才能继续使用。')+'</p><p style="margin:0 0 20px;line-height:1.7;color:#dbeafe">请点击链接加入群聊【'+esc(cfg.groupName||'王者雷达共享开黑组队群')+'】，找我获取授权码。</p><a href="'+esc(cfg.groupUrl||'#')+'" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;justify-content:center;height:42px;padding:0 18px;border-radius:8px;background:#38bdf8;color:#06111f;font-weight:800;text-decoration:none">加入群聊找授权码</a></div>';document.body.appendChild(box);return false;}
-function allow(data){authorized=true;trialOpen=false;lastResult=data||{};var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();removeNotice();if(data&&data.permanent)savePermanent();return true;}
+function kickStart(){setTimeout(function(){try{if(window.CardAuth&&typeof window.CardAuth.refresh==='function'){window.CardAuth.refresh();setTimeout(function(){try{if(window.CardAuth&&typeof window.CardAuth.start==='function')window.CardAuth.start();else if(typeof nativeInitApp==='function')gated(nativeInitApp,window,[]);else if(typeof window.initApp==='function')window.initApp();else if(typeof nativeInitWebSocket==='function')gated(nativeInitWebSocket,window,[]);else if(typeof window.initWebSocket==='function')window.initWebSocket();}catch(e){}},300);return;}if(typeof nativeInitApp==='function')gated(nativeInitApp,window,[]);else if(typeof window.initApp==='function')window.initApp();else if(typeof nativeInitWebSocket==='function')gated(nativeInitWebSocket,window,[]);else if(typeof window.initWebSocket==='function')window.initWebSocket();}catch(e){}},0);}
+function allow(data){authorized=true;trialOpen=false;lastResult=data||{};var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();removeNotice();if(data&&data.permanent)savePermanent();kickStart();return true;}
 function allowTrial(data){lastResult=data||{};if(trialLeft()>0)return showTrialNotice(data&&data.message?data.message:'试用结束前请联系管理员授权。');return block(data&&data.message?data.message:'未授权试用已结束，需要授权后才能继续使用。');}
 function checkLicense(force){if(authorized&&!force)return Promise.resolve(true);if(cfg.permanent||readPermanent())return Promise.resolve(allow({permanent:true,local:true}));if(checking)return checking;var url=String(cfg.serverUrl||'').replace(/\/+$/,'')+'/api/license/check?host='+encodeURIComponent(cfg.host||location.hostname||'')+'&domain='+encodeURIComponent(location.hostname||'')+'&mode='+encodeURIComponent(cfg.mode||'all')+'&_='+(Date.now());checking=fetch(url,{cache:'no-store'}).then(function(r){return r.json();}).then(function(data){checking=null;if(data&&data.authorized)return allow(data);return allowTrial(data||{});}).catch(function(){checking=null;return allowTrial({message:'授权服务器暂时连接失败，试用期内仍可使用；请尽快联系管理员授权。'});});return checking;}
 function gated(fn,ctx,args){if(authorized||trialOpen||cfg.permanent||readPermanent()||trialLeft()>0)return fn.apply(ctx,args);checkLicense(false).then(function(ok){if(ok)return fn.apply(ctx,args);});return undefined;}
 function wrap(){if(typeof window.initApp==='function'&&!window.initApp.__licenseWrapped){nativeInitApp=window.initApp;window.initApp=function(){return gated(nativeInitApp,this,arguments);};window.initApp.__licenseWrapped=true;}if(typeof window.initWebSocket==='function'&&!window.initWebSocket.__licenseWrapped){nativeInitWebSocket=window.initWebSocket;window.initWebSocket=function(){return gated(nativeInitWebSocket,this,arguments);};window.initWebSocket.__licenseWrapped=true;}}
-wrap();setTimeout(wrap,0);document.addEventListener('DOMContentLoaded',function(){wrap();checkLicense(false);});if(!cfg.permanent){setInterval(function(){checkLicense(true);},60000);setInterval(function(){if(!authorized&&trialLeft()<=0)block('未授权试用已结束，需要授权后才能继续使用。');else if(!authorized)showTrialNotice('试用结束前请联系管理员授权。');},300000);}
+wrap();setTimeout(wrap,0);document.addEventListener('DOMContentLoaded',function(){wrap();checkLicense(false).then(function(ok){if(ok)kickStart();});});if(!cfg.permanent){setInterval(function(){checkLicense(true);},60000);setInterval(function(){if(!authorized&&trialLeft()<=0)block('未授权试用已结束，需要授权后才能继续使用。');else if(!authorized)showTrialNotice('试用结束前请联系管理员授权。');},300000);}
 window.RadarServerLicense={check:checkLicense,isAuthorized:function(){return authorized;},last:function(){return lastResult;},showBlock:block};
 })();
 EOF
