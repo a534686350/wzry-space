@@ -32,9 +32,9 @@ function Get-DefaultOutputDir {
 
 $DefaultOutputDir = Get-DefaultOutputDir
 $DefaultNoBackendApiBase = 'https://101.200.36.10:80'
-$DefaultAppName = 'Mg共享雷达'
-$DefaultHomeTitle = 'MG Radar'
-$DefaultPanelTitle = 'MG内核内部版'
+$DefaultAppName = '自定义'
+$DefaultHomeTitle = '自定义'
+$DefaultPanelTitle = '自定义'
 $DefaultPanelChannel = 'SVIP10'
 $DefaultPanelStatus = '游戏进程已初始化'
 $DefaultVersionName = 'v6.1.16'
@@ -214,6 +214,10 @@ function Get-WebSocketPort {
     return $port
 }
 
+function Get-AllowCustomServerIp {
+    return ($null -ne $allowCustomServerIpInput -and $allowCustomServerIpInput.Checked)
+}
+
 function Get-BrandingOptions {
     $appName = ($appNameInput.Text -as [string]).Trim()
     if ([string]::IsNullOrWhiteSpace($appName)) {
@@ -306,6 +310,7 @@ function Set-Building {
     $wsPortInput.Enabled = -not $IsBuilding
     $schemeInput.Enabled = -not $IsBuilding
     $loginModeInput.Enabled = -not $IsBuilding
+    $allowCustomServerIpInput.Enabled = -not $IsBuilding
     $buyUrlInput.Enabled = -not $IsBuilding
     $appNameInput.Enabled = -not $IsBuilding
     $homeTitleInput.Enabled = -not $IsBuilding
@@ -349,8 +354,9 @@ function Update-Preview {
         $wsPort = Get-WebSocketPort
         $selectedLoginMode = Get-SelectedLoginMode
         $apiBase = if ($selectedLoginMode -eq 'frontend') { $DefaultNoBackendApiBase } else { $target.ApiBase }
+        $customIpText = if (Get-AllowCustomServerIp) { '开' } else { '关' }
         $script:LastTarget = $target
-        $previewLabel.Text = "后台/API：$apiBase    房间/雷达WS：ws://$($target.Host):$wsPort/ws"
+        $previewLabel.Text = "后台/API：$apiBase    房间/雷达WS：ws://$($target.Host):$wsPort/ws    APP改IP：$customIpText"
         $previewLabel.ForeColor = [System.Drawing.Color]::FromArgb(28, 99, 52)
     }
     catch {
@@ -509,6 +515,7 @@ function Start-Build {
         $branding = Get-BrandingOptions
         $version = Get-VersionOptions
         $wsPort = Get-WebSocketPort
+        $allowCustomServerIp = Get-AllowCustomServerIp
         $buyUrl = Get-OptionalUrl $buyUrlInput.Text '购买卡密链接'
         $selectedLoginMode = Get-SelectedLoginMode
         $loginMode = $selectedLoginMode
@@ -544,6 +551,7 @@ function Start-Build {
         $gradleArgs.Add('-PAPP_SERVER_HOST=' + $target.Host) | Out-Null
         $gradleArgs.Add('-PAPP_SERVER_PORT=' + $wsPort) | Out-Null
         $gradleArgs.Add('-PAPP_FIXED=true') | Out-Null
+        $gradleArgs.Add('-PAPP_ALLOW_CUSTOM_SERVER_IP=' + $allowCustomServerIp.ToString().ToLowerInvariant()) | Out-Null
         $gradleArgs.Add('-PAPP_LOGIN_MODE=' + $loginMode) | Out-Null
         $gradleArgs.Add('-PAPP_NAME=' + $branding.AppName) | Out-Null
         $gradleArgs.Add('-PAPP_HOME_TITLE=' + $branding.HomeTitle) | Out-Null
@@ -603,6 +611,7 @@ function Start-Build {
         }
         Append-Log "APK 后台/API：$apkApiBase"
         Append-Log "房间/雷达 WebSocket：ws://$($target.Host):$wsPort/ws"
+        Append-Log "APP 内自定义房间服务器 IP：$(if ($allowCustomServerIp) { '开启' } else { '关闭' })"
         Append-Log "是否带后台：$loginMode（backend=带后台登录/API，frontend=不带后台免登录）"
         if (-not [string]::IsNullOrWhiteSpace($buyUrl)) {
             Append-Log "购买卡密链接兜底：$buyUrl"
@@ -730,10 +739,18 @@ $loginModeInput.Size = New-Object System.Drawing.Size(220, 26)
 $loginModeInput.Add_SelectedIndexChanged({ Update-Preview })
 $form.Controls.Add($loginModeInput)
 
+$allowCustomServerIpInput = New-Object System.Windows.Forms.CheckBox
+$allowCustomServerIpInput.Text = 'APP可改IP'
+$allowCustomServerIpInput.Location = New-Object System.Drawing.Point(724, 156)
+$allowCustomServerIpInput.Size = New-Object System.Drawing.Size(110, 24)
+$allowCustomServerIpInput.Checked = $false
+$allowCustomServerIpInput.Add_CheckedChanged({ Update-Preview })
+$form.Controls.Add($allowCustomServerIpInput)
+
 $loginModeHint = New-Object System.Windows.Forms.Label
 $loginModeHint.Text = '不带后台时管理/API 固定走 101.200.36.10:80；房间数据仍走输入IP的8888。'
 $loginModeHint.Location = New-Object System.Drawing.Point(366, 158)
-$loginModeHint.Size = New-Object System.Drawing.Size(390, 24)
+$loginModeHint.Size = New-Object System.Drawing.Size(350, 24)
 $loginModeHint.ForeColor = [System.Drawing.Color]::FromArgb(82, 94, 112)
 $form.Controls.Add($loginModeHint)
 

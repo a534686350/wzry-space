@@ -13,10 +13,11 @@ def radarAppApiBase = (project.findProperty("APP_API_BASE") ?: "http://你的域
 def radarAppServerHost = (project.findProperty("APP_SERVER_HOST") ?: "你的域名或新服务器IP").toString()
 def radarAppServerPort = (project.findProperty("APP_SERVER_PORT") ?: "8888").toString()
 def radarAppFixed = (project.findProperty("APP_FIXED") ?: "false").toString().equalsIgnoreCase("true")
+def radarAppAllowCustomServerIp = (project.findProperty("APP_ALLOW_CUSTOM_SERVER_IP") ?: "false").toString().equalsIgnoreCase("true")
 def radarAppLoginMode = (project.findProperty("APP_LOGIN_MODE") ?: "auto").toString()
-def radarAppName = (project.findProperty("APP_NAME") ?: "ALin雷达").toString()
-def radarAppHomeTitle = (project.findProperty("APP_HOME_TITLE") ?: "MG Radar").toString()
-def radarAppPanelTitle = (project.findProperty("APP_PANEL_TITLE") ?: "MG内核内部版").toString()
+def radarAppName = (project.findProperty("APP_NAME") ?: "\u81ea\u5b9a\u4e49").toString()
+def radarAppHomeTitle = (project.findProperty("APP_HOME_TITLE") ?: "\u81ea\u5b9a\u4e49").toString()
+def radarAppPanelTitle = (project.findProperty("APP_PANEL_TITLE") ?: "\u81ea\u5b9a\u4e49").toString()
 def radarAppPanelChannel = (project.findProperty("APP_PANEL_CHANNEL") ?: "SVIP10").toString()
 def radarAppPanelStatus = (project.findProperty("APP_PANEL_STATUS") ?: "游戏进程已初始化").toString()
 def radarAppIconFile = (project.findProperty("APP_ICON_FILE") ?: "").toString().trim()
@@ -36,6 +37,7 @@ if (radarAppVersionCode <= 0) {
     throw new GradleException("APP_VERSION_CODE 必须大于 0: ${radarAppVersionCode}")
 }
 def radarAppVersionNameLiteral = groovy.json.JsonOutput.toJson(radarAppVersionName)
+def radarAppNameLiteral = groovy.json.JsonOutput.toJson(radarAppName)
 def radarAppHomeTitleLiteral = groovy.json.JsonOutput.toJson(radarAppHomeTitle)
 def radarAppPanelTitleLiteral = groovy.json.JsonOutput.toJson(radarAppPanelTitle)
 def radarAppPanelChannelLiteral = groovy.json.JsonOutput.toJson(radarAppPanelChannel)
@@ -86,6 +88,7 @@ def generateRadarAppConfig = tasks.register("generateRadarAppConfig") {
     inputs.property("serverHost", radarAppServerHost)
     inputs.property("serverPort", radarAppServerPort)
     inputs.property("fixed", radarAppFixed)
+    inputs.property("allowCustomServerIp", radarAppAllowCustomServerIp)
     inputs.property("loginMode", radarAppLoginMode)
     inputs.property("appName", radarAppName)
     inputs.property("homeTitle", radarAppHomeTitle)
@@ -103,6 +106,7 @@ def generateRadarAppConfig = tasks.register("generateRadarAppConfig") {
             serverHost: radarAppServerHost,
             serverPort: radarAppServerPort,
             fixed: radarAppFixed,
+            allowCustomServerIp: radarAppAllowCustomServerIp,
             loginMode: radarAppLoginMode,
             appName: radarAppName,
             homeTitle: radarAppHomeTitle,
@@ -143,10 +147,12 @@ android {
         versionName radarAppVersionName
         buildConfigField "int", "APP_VERSION_CODE", String.valueOf(radarAppVersionCode)
         buildConfigField "String", "APP_VERSION_NAME", radarAppVersionNameLiteral
+        buildConfigField "String", "APP_NAME", radarAppNameLiteral
         buildConfigField "String", "APP_HOME_TITLE", radarAppHomeTitleLiteral
         buildConfigField "String", "APP_PANEL_TITLE", radarAppPanelTitleLiteral
         buildConfigField "String", "APP_PANEL_CHANNEL", radarAppPanelChannelLiteral
         buildConfigField "String", "APP_PANEL_STATUS", radarAppPanelStatusLiteral
+        buildConfigField "boolean", "APP_ALLOW_CUSTOM_SERVER_IP", String.valueOf(radarAppAllowCustomServerIp)
         manifestPlaceholders = [
             appLabel: radarAppName,
             appIcon: radarHasCustomIcon ? "@mipmap/ic_launcher" : "@drawable/ic_radar",

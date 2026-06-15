@@ -90,6 +90,7 @@ public class MainActivity extends Activity {
     private EditText activateCardInput;
     private EditText securityInput;
     private EditText apiBaseInput;
+    private EditText customServerIpInput;
     private Spinner fpsSpinner;
     private Button minionFixButton;
     private Button roomSelectButton;
@@ -130,9 +131,10 @@ public class MainActivity extends Activity {
     private String bundledServerHost = "";
     private int bundledServerPort = DEFAULT_SERVER_PORT;
     private String bundledLoginMode = "auto";
-    private String bundledAppName = "ALin雷达";
+    private String bundledAppName = BuildConfig.APP_NAME;
     private String bundledBuyUrl = "";
     private boolean fixedBundledServer;
+    private boolean allowCustomServerIp = BuildConfig.APP_ALLOW_CUSTOM_SERVER_IP;
     private int minionLaneRotationSteps;
     private float heroIconScale = 1f;
     private final Handler heartbeatHandler = new Handler(Looper.getMainLooper());
@@ -575,6 +577,8 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
         nav.addView(mgNavButton("\u83dc\u5355", this::showMainMenu), new LinearLayout.LayoutParams(0, dp(34), 1));
         root.addView(nav, lpTop(-2, 14));
 
+        addCustomServerIpSection(root);
+
         LinearLayout roomCard = mgSection(root, "\u623f\u95f4\u5171\u4eab", "\u9009\u62e9\u623f\u95f4\u5e76\u5237\u65b0\u5171\u4eab\u6570\u636e");
         LinearLayout roomSelectRow = new LinearLayout(this);
         roomSelectRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -662,6 +666,22 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
         startOnlineHeartbeat();
         if (fixedBundledServer) loadBundledServerOnly();
         else loadPublicServers();
+    }
+
+    private void addCustomServerIpSection(LinearLayout root) {
+        if (!allowCustomServerIp) return;
+        LinearLayout card = mgSection(root, "\u623f\u95f4\u670d\u52a1\u5668", "\u7559\u7a7a\u4f7f\u7528\u6253\u5305IP\uff0c\u586b\u5199\u540e\u8d70\u8f93\u5165IP\u7684 8888/ws");
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        customServerIpInput = makeInput("\u8f93\u5165IP\u6216\u57df\u540d");
+        customServerIpInput.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
+        customServerIpInput.setText(customServerHost());
+        row.addView(customServerIpInput, new LinearLayout.LayoutParams(0, dp(46), 1));
+        Button saveButton = makeSmallButton("\u4fdd\u5b58", this::saveCustomServerIpAndRefresh);
+        LinearLayout.LayoutParams saveLp = new LinearLayout.LayoutParams(dp(72), dp(46));
+        saveLp.leftMargin = dp(8);
+        row.addView(saveButton, saveLp);
+        card.addView(row, lpTop(-2, 10));
     }
 
     private Button mgNavButton(String text, Runnable action) {
@@ -895,9 +915,10 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
             bundledServerHost = normalizeServerHost(json.optString("serverHost", ""));
             bundledServerPort = normalizeServerPort(json.optString("serverPort", ""), DEFAULT_SERVER_PORT);
             bundledLoginMode = json.optString("loginMode", "auto").trim().toLowerCase();
-            bundledAppName = json.optString("appName", bundledAppName).trim();
+            bundledAppName = json.optString("appName", BuildConfig.APP_NAME).trim();
             bundledBuyUrl = json.optString("buyUrl", "").trim();
-            if (bundledAppName.length() == 0) bundledAppName = "ALin雷达";
+            allowCustomServerIp = BuildConfig.APP_ALLOW_CUSTOM_SERVER_IP || json.optBoolean("allowCustomServerIp", false);
+            if (bundledAppName.length() == 0) bundledAppName = BuildConfig.APP_NAME;
             if (!"backend".equals(bundledLoginMode) && !"frontend".equals(bundledLoginMode)) bundledLoginMode = "auto";
             fixedBundledServer = json.optBoolean("fixed", false) && bundledApiBase.length() > 0;
         } catch (Exception ignored) {
@@ -905,9 +926,10 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
             bundledServerHost = "";
             bundledServerPort = DEFAULT_SERVER_PORT;
             bundledLoginMode = "auto";
-            bundledAppName = "ALin雷达";
+            bundledAppName = BuildConfig.APP_NAME;
             bundledBuyUrl = "";
             fixedBundledServer = false;
+            allowCustomServerIp = BuildConfig.APP_ALLOW_CUSTOM_SERVER_IP;
         }
     }
 
@@ -970,7 +992,7 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
     }
 
     private String appTitle() {
-        return bundledAppName == null || bundledAppName.trim().length() == 0 ? "ALin雷达" : bundledAppName.trim();
+        return bundledAppName == null || bundledAppName.trim().length() == 0 ? BuildConfig.APP_NAME : bundledAppName.trim();
     }
 
     private int brandIconResId() {
@@ -1014,7 +1036,7 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
     }
 
     private void loadPublicServers() {
-        if (fixedBundledServer) {
+        if (fixedBundledServer || hasCustomServerHost()) {
             loadBundledServerOnly();
             return;
         }
@@ -1273,11 +1295,40 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
     }
 
     private String defaultServerHost() {
+        String custom = customServerHost();
+        if (custom.length() > 0) return custom;
         return bundledServerHost.length() > 0 ? bundledServerHost : DEFAULT_SERVER_HOST;
     }
 
     private int defaultServerPort() {
         return bundledServerPort > 0 ? bundledServerPort : DEFAULT_SERVER_PORT;
+    }
+
+    private String customServerHost() {
+        if (!allowCustomServerIp || prefs == null) return "";
+        return normalizeServerHost(prefs.getString("custom_server_host", ""));
+    }
+
+    private boolean hasCustomServerHost() {
+        return customServerHost().length() > 0;
+    }
+
+    private void saveCustomServerIpAndRefresh() {
+        if (!allowCustomServerIp || customServerIpInput == null) return;
+        String raw = customServerIpInput.getText().toString();
+        String next = normalizeServerHost(raw);
+        SharedPreferences.Editor editor = prefs.edit();
+        if (next.length() == 0) {
+            editor.remove("custom_server_host");
+            setStatus("\u5df2\u6062\u590d\u4f7f\u7528\u6253\u5305IP\uff0c\u6b63\u5728\u5237\u65b0\u623f\u95f4...");
+        } else {
+            editor.putString("custom_server_host", next);
+            setStatus("\u5df2\u5207\u6362\u623f\u95f4\u670d\u52a1\u5668 " + next + ":" + defaultServerPort() + "\uff0c\u6b63\u5728\u5237\u65b0...");
+        }
+        editor.remove("selected_room").apply();
+        selectedRoomLabel = "";
+        customServerIpInput.setText(next);
+        loadBundledServerOnly();
     }
 
     private String buildWsUrl(String value) {

@@ -449,17 +449,17 @@ public class NativeOverlayService extends Service {
 
     private void startForegroundCompat() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel("native_overlay", "ALin Radar", NotificationManager.IMPORTANCE_LOW);
+            NotificationChannel channel = new NotificationChannel("native_overlay", BuildConfig.APP_NAME, NotificationManager.IMPORTANCE_LOW);
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) manager.createNotificationChannel(channel);
             Notification notification = new Notification.Builder(this, "native_overlay")
-                    .setContentTitle("ALin Radar running")
+                    .setContentTitle(BuildConfig.APP_NAME + " running")
                     .setSmallIcon(android.R.drawable.ic_menu_compass)
                     .build();
             startForeground(2, notification);
         } else {
             Notification notification = new Notification.Builder(this)
-                    .setContentTitle("ALin Radar running")
+                    .setContentTitle(BuildConfig.APP_NAME + " running")
                     .setSmallIcon(android.R.drawable.ic_menu_compass)
                     .build();
             startForeground(2, notification);
@@ -1039,7 +1039,7 @@ public class NativeOverlayService extends Service {
     private void updatePanelVisibility() {
         if (adjustPanel != null) adjustPanel.setVisibility(panelVisible ? View.VISIBLE : View.GONE);
         if (toggleButton != null) {
-            toggleButton.setText(panelVisible ? "MG -" : "MG +");
+            toggleButton.setText(panelVisible ? BuildConfig.APP_NAME + " -" : BuildConfig.APP_NAME + " +");
             toggleButton.setAlpha(panelVisible ? 0.82f : 0.55f);
         }
     }
@@ -1080,7 +1080,7 @@ public class NativeOverlayService extends Service {
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.VERTICAL);
         nav.setPadding(0, 0, dp(6), 0);
-        TextView logo = panelText("MG", 20, true);
+        TextView logo = panelText(BuildConfig.APP_NAME, 20, true);
         logo.setTextColor(0xffe8fbff);
         logo.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC));
         logo.setGravity(Gravity.CENTER);
@@ -1167,7 +1167,7 @@ public class NativeOverlayService extends Service {
         } else {
             panelContent.addView(panelText("更换背景", 13, true), new LinearLayout.LayoutParams(-1, dp(24)));
             addPanelAlphaRow(panelContent);
-            addPanelAction(panelContent, "恢复MG背景", () -> {
+            addPanelAction(panelContent, "恢复背景", () -> {
                 panelAlpha = 0.88f;
                 applyPanelAlpha();
                 if (prefs == null) prefs = getSharedPreferences("alin_radar", MODE_PRIVATE);
