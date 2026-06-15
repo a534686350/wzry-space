@@ -952,20 +952,27 @@ try {
             <input type="number" id="gameServerPort" value="8888" min="1" max="65535" style="width:100px;">
             <button type="button" class="btn btn-primary" id="btnGameServerAdd">添加服务器</button>
             <button type="button" class="btn btn-secondary" id="btnGameServerTestAll">一键测试</button>
+            <button type="button" class="btn btn-secondary" id="btnGameServerTestSelected">测试选中</button>
+            <button type="button" class="btn btn-secondary" id="btnGameServerFetchRoomsAll">获取房间号</button>
+            <button type="button" class="btn btn-secondary" id="btnGameServerFetchRoomsSelected">获取选中房间</button>
+            <button type="button" class="btn btn-secondary" id="btnGameServerEnableSelected">启用选中</button>
+            <button type="button" class="btn btn-secondary" id="btnGameServerDisableSelected">停用选中</button>
             <button type="button" class="btn btn-danger" id="btnGameServerDeleteSelected">删除选中</button>
+            <input type="text" id="gameServerKeywordFilter" placeholder="筛选名称 / IP / 来源" style="width:180px;">
             <select id="gameServerCheckFilter" style="width:130px;">
                 <option value="all">全部状态</option>
                 <option value="online">仅连通</option>
                 <option value="offline">仅不通</option>
                 <option value="untested">未测试</option>
+                <option value="rooms">有房间号</option>
             </select>
         </div>
         <table>
             <thead>
-                <tr><th style="width:42px;"><input type="checkbox" id="gameServerSelectAll"></th><th>名称</th><th>服务器</th><th>端口</th><th>启用</th><th>测试结果</th><th>添加时间</th><th>操作</th></tr>
+                <tr><th style="width:42px;"><input type="checkbox" id="gameServerSelectAll"></th><th>名称</th><th>服务器</th><th>端口</th><th>启用</th><th>测试结果</th><th>房间号</th><th>添加时间</th><th>操作</th></tr>
             </thead>
             <tbody id="gameServerBody">
-                <tr><td colspan="8" class="empty">加载中...</td></tr>
+                <tr><td colspan="9" class="empty">加载中...</td></tr>
             </tbody>
         </table>
     </div>
@@ -2080,23 +2087,51 @@ try {
 
         // 游戏服务器
         var gameServerAllList = [];
+        var gameServerRooms = {};
         function getGameServerCheckFilter() {
             var el = document.getElementById('gameServerCheckFilter');
             return el && el.value ? el.value : 'all';
+        }
+        function getGameServerKeywordFilter() {
+            var el = document.getElementById('gameServerKeywordFilter');
+            return el && el.value ? String(el.value).trim().toLowerCase() : '';
+        }
+        function getSelectedGameServerIds() {
+            var ids = [];
+            document.querySelectorAll('#gameServerBody .game-server-checkbox:checked').forEach(function(box) {
+                var id = parseInt(box.value, 10);
+                if (id > 0) ids.push(id);
+            });
+            return ids;
         }
         function renderGameServers(list) {
             var tbody = document.getElementById('gameServerBody');
             if (!tbody) return;
             var filter = getGameServerCheckFilter();
+            var keyword = getGameServerKeywordFilter();
             var filtered = list.filter(function(row) {
                 var status = row.last_check_status || '';
                 if (filter === 'online') return status === 'online';
                 if (filter === 'offline') return status === 'offline';
                 if (filter === 'untested') return status !== 'online' && status !== 'offline';
+                if (filter === 'rooms') return (gameServerRooms[row.id] && gameServerRooms[row.id].length > 0);
                 return true;
+            }).filter(function(row) {
+                if (!keyword) return true;
+                var haystack = [
+                    row.name || '',
+                    row.host || '',
+                    row.port || '',
+                    row.source || '',
+                    row.reported_username || '',
+                    row.last_check_status || '',
+                    row.last_check_error || '',
+                    (gameServerRooms[row.id] || []).join(',')
+                ].join(' ').toLowerCase();
+                return haystack.indexOf(keyword) !== -1;
             });
             if (!filtered.length) {
-                tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无匹配服务器</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="empty">暂无匹配服务器</td></tr>';
                 return;
             }
             tbody.innerHTML = filtered.map(function(row) {
@@ -2110,6 +2145,10 @@ try {
                     checkHtml = '<span class="status-invalid">不通</span>' + (row.last_check_error ? '<br><span class="muted">' + escapeHtml(row.last_check_error) + '</span>' : '');
                 }
                 if (row.last_check_at) checkHtml += '<br><span class="muted">' + escapeHtml(row.last_check_at) + '</span>';
+                var roomList = gameServerRooms[row.id] || [];
+                var roomsHtml = roomList.length
+                    ? '<span class="status-ok">' + roomList.length + ' 个</span><br><code>' + escapeHtml(roomList.join(', ')) + '</code>'
+                    : '<span class="muted">未获取</span>';
                 var sourceText = row.source === 'app' ? 'APP上传' : '管理员添加';
                 var sourceHtml = '<br><span class="muted">' + sourceText + (row.reported_username ? ' · ' + escapeHtml(row.reported_username) : '') + '</span>';
                 return '<tr>' +
@@ -2119,6 +2158,7 @@ try {
                     '<td>' + escapeHtml(String(row.port || 8888)) + '</td>' +
                     '<td>' + (enabled ? '<span class="status-ok">启用</span>' : '<span class="status-invalid">停用</span>') + '</td>' +
                     '<td>' + checkHtml + '</td>' +
+                    '<td>' + roomsHtml + '</td>' +
                     '<td>' + (row.created_at || '').replace(' ', '<br>') + '</td>' +
                     '<td><button type="button" class="btn btn-secondary btn-small btn-server-test" data-id="' + row.id + '">测试</button> ' +
                     '<button type="button" class="btn btn-secondary btn-small btn-server-toggle" data-id="' + row.id + '" data-enabled="' + (enabled ? 0 : 1) + '">' + (enabled ? '停用' : '启用') + '</button> ' +
@@ -2199,23 +2239,25 @@ try {
                 .then(function(r) { return r.json(); })
                 .then(function(res) {
                     if (res.code !== 0) {
-                        tbody.innerHTML = '<tr><td colspan="8" class="empty">' + escapeHtml(res.msg || '加载失败') + '</td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="9" class="empty">' + escapeHtml(res.msg || '加载失败') + '</td></tr>';
                         return;
                     }
                     var list = res.data && res.data.list ? res.data.list : [];
                     gameServerAllList = list;
                     if (!list.length) {
-                        tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无服务器，前台将默认连接当前访问域名的 8888 端口</td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="9" class="empty">暂无服务器，APP 暂无可刷新的房间服务器 IP</td></tr>';
                         return;
                     }
                     renderGameServers(list);
                 })
                 .catch(function() {
-                    tbody.innerHTML = '<tr><td colspan="8" class="empty">请求失败</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="9" class="empty">请求失败</td></tr>';
                 });
         }
         var gameServerCheckFilter = document.getElementById('gameServerCheckFilter');
         if (gameServerCheckFilter) gameServerCheckFilter.onchange = function() { renderGameServers(gameServerAllList); };
+        var gameServerKeywordFilter = document.getElementById('gameServerKeywordFilter');
+        if (gameServerKeywordFilter) gameServerKeywordFilter.oninput = function() { renderGameServers(gameServerAllList); };
         var btnGameServerTestAll = document.getElementById('btnGameServerTestAll');
         if (btnGameServerTestAll) btnGameServerTestAll.onclick = function() {
             btnGameServerTestAll.disabled = true;
@@ -2241,13 +2283,151 @@ try {
                 showMsg('网络错误', true);
             });
         };
+        var btnGameServerTestSelected = document.getElementById('btnGameServerTestSelected');
+        if (btnGameServerTestSelected) btnGameServerTestSelected.onclick = function() {
+            var ids = getSelectedGameServerIds();
+            if (!ids.length) { showMsg('请先勾选要测试的服务器', true); return; }
+            btnGameServerTestSelected.disabled = true;
+            btnGameServerTestSelected.textContent = '测试中';
+            fetch(API_BASE + '/api/index.php?module=game_servers', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ action: 'test', ids: ids })
+            }).then(function(r) { return r.json(); }).then(function(res) {
+                btnGameServerTestSelected.disabled = false;
+                btnGameServerTestSelected.textContent = '测试选中';
+                if (res.code === 0) {
+                    var d = res.data || {};
+                    showMsg('选中测试完成：连通 ' + (d.online || 0) + '，不通 ' + (d.offline || 0));
+                    loadGameServers();
+                } else {
+                    showMsg(res.msg || '测试失败', true);
+                }
+            }).catch(function() {
+                btnGameServerTestSelected.disabled = false;
+                btnGameServerTestSelected.textContent = '测试选中';
+                showMsg('网络错误', true);
+            });
+        };
+        function parseHomeRoomsMessage(text) {
+            if (!text || text.indexOf('homeData##') === -1) return [];
+            var payload = text.slice(text.indexOf('homeData##') + 'homeData##'.length);
+            var rooms = [];
+            payload.split(',').forEach(function(item) {
+                var room = String(item || '').trim();
+                if (room && rooms.indexOf(room) === -1) rooms.push(room);
+            });
+            return rooms;
+        }
+        function fetchGameServerRooms(row) {
+            return new Promise(function(resolve) {
+                if (!row || !row.host) { resolve({ id: row && row.id, rooms: [], error: 'empty host' }); return; }
+                var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+                var url = scheme + row.host + ':' + (row.port || 8888) + '/ws';
+                var done = false;
+                var ws;
+                var timer = setTimeout(function() {
+                    if (done) return;
+                    done = true;
+                    try { if (ws) ws.close(); } catch (e) {}
+                    resolve({ id: row.id, rooms: [], error: 'timeout' });
+                }, 6500);
+                try {
+                    ws = new WebSocket(url);
+                    ws.onopen = function() { try { ws.send('getHome'); } catch (e) {} };
+                    ws.onmessage = function(ev) {
+                        if (done) return;
+                        var rooms = parseHomeRoomsMessage(String(ev.data || ''));
+                        if (!rooms.length && String(ev.data || '').indexOf('homeData##') === -1) return;
+                        done = true;
+                        clearTimeout(timer);
+                        try { ws.close(); } catch (e) {}
+                        resolve({ id: row.id, rooms: rooms, error: '' });
+                    };
+                    ws.onerror = function() {
+                        if (done) return;
+                        done = true;
+                        clearTimeout(timer);
+                        resolve({ id: row.id, rooms: [], error: 'connect failed' });
+                    };
+                    ws.onclose = function() {
+                        if (done) return;
+                        done = true;
+                        clearTimeout(timer);
+                        resolve({ id: row.id, rooms: [], error: 'closed' });
+                    };
+                } catch (e) {
+                    done = true;
+                    clearTimeout(timer);
+                    resolve({ id: row.id, rooms: [], error: e.message || 'error' });
+                }
+            });
+        }
+        function rowsBySelectedIds(ids) {
+            var map = {};
+            ids.forEach(function(id) { map[id] = true; });
+            return gameServerAllList.filter(function(row) { return map[row.id]; });
+        }
+        function fetchRoomsForRows(rows, button) {
+            rows = rows || [];
+            if (!rows.length) { showMsg('没有可获取房间号的服务器', true); return; }
+            var oldText = button ? button.textContent : '';
+            if (button) { button.disabled = true; button.textContent = '获取中'; }
+            showMsg('正在获取房间号...');
+            Promise.all(rows.map(fetchGameServerRooms)).then(function(results) {
+                var withRooms = 0;
+                var totalRooms = 0;
+                results.forEach(function(result) {
+                    gameServerRooms[result.id] = result.rooms || [];
+                    if (result.rooms && result.rooms.length) {
+                        withRooms++;
+                        totalRooms += result.rooms.length;
+                    }
+                });
+                if (button) { button.disabled = false; button.textContent = oldText; }
+                renderGameServers(gameServerAllList);
+                showMsg('房间号获取完成：' + withRooms + ' 台有房间，共 ' + totalRooms + ' 个房间');
+            }).catch(function() {
+                if (button) { button.disabled = false; button.textContent = oldText; }
+                showMsg('获取房间号失败', true);
+            });
+        }
+        var btnGameServerFetchRoomsAll = document.getElementById('btnGameServerFetchRoomsAll');
+        if (btnGameServerFetchRoomsAll) btnGameServerFetchRoomsAll.onclick = function() {
+            fetchRoomsForRows(gameServerAllList, btnGameServerFetchRoomsAll);
+        };
+        var btnGameServerFetchRoomsSelected = document.getElementById('btnGameServerFetchRoomsSelected');
+        if (btnGameServerFetchRoomsSelected) btnGameServerFetchRoomsSelected.onclick = function() {
+            var ids = getSelectedGameServerIds();
+            if (!ids.length) { showMsg('请先勾选服务器', true); return; }
+            fetchRoomsForRows(rowsBySelectedIds(ids), btnGameServerFetchRoomsSelected);
+        };
+        function batchToggleGameServers(enabled) {
+            var ids = getSelectedGameServerIds();
+            if (!ids.length) { showMsg('请先勾选服务器', true); return; }
+            fetch(API_BASE + '/api/index.php?module=game_servers', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ action: 'batch_toggle', ids: ids, enabled: enabled ? 1 : 0 })
+            }).then(function(r) { return r.json(); }).then(function(res) {
+                if (res.code === 0) {
+                    var d = res.data || {};
+                    showMsg((enabled ? '已启用 ' : '已停用 ') + (d.updated || ids.length) + ' 个服务器');
+                    loadGameServers();
+                } else {
+                    showMsg(res.msg || '更新失败', true);
+                }
+            }).catch(function() { showMsg('网络错误', true); });
+        }
+        var btnGameServerEnableSelected = document.getElementById('btnGameServerEnableSelected');
+        if (btnGameServerEnableSelected) btnGameServerEnableSelected.onclick = function() { batchToggleGameServers(true); };
+        var btnGameServerDisableSelected = document.getElementById('btnGameServerDisableSelected');
+        if (btnGameServerDisableSelected) btnGameServerDisableSelected.onclick = function() { batchToggleGameServers(false); };
         var btnGameServerDeleteSelected = document.getElementById('btnGameServerDeleteSelected');
         if (btnGameServerDeleteSelected) btnGameServerDeleteSelected.onclick = function() {
-            var ids = [];
-            document.querySelectorAll('#gameServerBody .game-server-checkbox:checked').forEach(function(box) {
-                var id = parseInt(box.value, 10);
-                if (id > 0) ids.push(id);
-            });
+            var ids = getSelectedGameServerIds();
             if (!ids.length) {
                 showMsg('请先勾选要删除的服务器', true);
                 return;

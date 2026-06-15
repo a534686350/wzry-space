@@ -1,0 +1,12 @@
+-keep class com.qy.wzryoverlay.MainActivity { *; }
+-keep class com.qy.wzryoverlay.NativeOverlayService { *; }
+-keep class com.qy.wzryoverlay.RadarData { *; }
+-keep class com.qy.wzryoverlay.RadarData$* { *; }
+-keep class com.qy.wzryoverlay.RadarParser { *; }
+
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-dontwarn javax.annotation.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**

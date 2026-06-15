@@ -31,16 +31,16 @@ function Get-DefaultOutputDir {
 }
 
 $DefaultOutputDir = Get-DefaultOutputDir
-$DefaultNoBackendApiBase = 'https://101.200.36.10:80'
-$DefaultAppName = '自定义'
-$DefaultHomeTitle = '自定义'
-$DefaultPanelTitle = '自定义'
-$DefaultPanelChannel = 'SVIP10'
+$DefaultNoBackendApiBase = 'http://101.200.36.103'
+$DefaultAppName = 'LD'
+$DefaultHomeTitle = 'LD'
+$DefaultPanelTitle = 'LD'
+$DefaultPanelChannel = '天青色等烟雨'
 $DefaultPanelStatus = '游戏进程已初始化'
-$DefaultVersionName = 'v6.1.16'
-$DefaultVersionCode = '16'
+$DefaultVersionName = 'v6.1.18'
+$DefaultVersionCode = '17'
 $DefaultBuyUrl = ''
-$DefaultIconPath = ''
+$DefaultIconPath = 'D:\hl\ALinRadar\图标\ChatGPT Image 2026年6月15日 11_05_51.png'
 
 function Get-ReleaseApkPath {
     if (Test-Path -LiteralPath $ReleaseMetadata) {
@@ -645,19 +645,20 @@ $form.Text = 'ALinRadar 本地 APK 打包器'
 $form.Size = New-Object System.Drawing.Size(860, 850)
 $form.StartPosition = 'CenterScreen'
 $form.MinimumSize = New-Object System.Drawing.Size(840, 810)
-$form.BackColor = [System.Drawing.Color]::FromArgb(245, 248, 252)
+$form.BackColor = [System.Drawing.Color]::FromArgb(238, 244, 252)
 
 $title = New-Object System.Windows.Forms.Label
-$title.Text = 'ALinRadar 本地 APK 打包器'
-$title.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 16, [System.Drawing.FontStyle]::Bold)
+$title.Text = 'LD APK 打包工作台'
+$title.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 18, [System.Drawing.FontStyle]::Bold)
+$title.ForeColor = [System.Drawing.Color]::White
 $title.AutoSize = $true
 $title.Location = New-Object System.Drawing.Point(22, 18)
 $form.Controls.Add($title)
 
 $subtitle = New-Object System.Windows.Forms.Label
-$subtitle.Text = '输入服务器 IP/域名、网页端口和 WS 端口；后台只负责登录/API，房间数据固定走 8888/ws。'
+$subtitle.Text = '配置服务器、品牌信息与图标，本机一键生成加固混淆 Release APK。'
 $subtitle.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
-$subtitle.ForeColor = [System.Drawing.Color]::FromArgb(82, 94, 112)
+$subtitle.ForeColor = [System.Drawing.Color]::FromArgb(203, 213, 225)
 $subtitle.AutoSize = $true
 $subtitle.Location = New-Object System.Drawing.Point(24, 50)
 $form.Controls.Add($subtitle)
@@ -687,7 +688,7 @@ $form.Controls.Add($hostLabel)
 $hostInput = New-Object System.Windows.Forms.TextBox
 $hostInput.Location = New-Object System.Drawing.Point(340, 85)
 $hostInput.Size = New-Object System.Drawing.Size(210, 26)
-$hostInput.Text = '192.140.166.49'
+$hostInput.Text = '101.200.36.103'
 $hostInput.Add_TextChanged({ Update-Preview })
 $form.Controls.Add($hostInput)
 
@@ -700,7 +701,7 @@ $form.Controls.Add($portLabel)
 $portInput = New-Object System.Windows.Forms.TextBox
 $portInput.Location = New-Object System.Drawing.Point(628, 85)
 $portInput.Size = New-Object System.Drawing.Size(55, 26)
-$portInput.Text = '85'
+$portInput.Text = '80'
 $portInput.Add_TextChanged({ Update-Preview })
 $form.Controls.Add($portInput)
 
@@ -721,6 +722,7 @@ $previewLabel = New-Object System.Windows.Forms.Label
 $previewLabel.Location = New-Object System.Drawing.Point(24, 122)
 $previewLabel.Size = New-Object System.Drawing.Size(790, 24)
 $previewLabel.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9, [System.Drawing.FontStyle]::Bold)
+$previewLabel.ForeColor = [System.Drawing.Color]::FromArgb(4, 120, 87)
 $form.Controls.Add($previewLabel)
 
 $loginModeLabel = New-Object System.Windows.Forms.Label
@@ -733,7 +735,7 @@ $loginModeInput = New-Object System.Windows.Forms.ComboBox
 $loginModeInput.DropDownStyle = 'DropDownList'
 $loginModeInput.Items.Add('带后台（登录/API）') | Out-Null
 $loginModeInput.Items.Add('不带后台（免登录）') | Out-Null
-$loginModeInput.SelectedIndex = 1
+$loginModeInput.SelectedIndex = 0
 $loginModeInput.Location = New-Object System.Drawing.Point(130, 155)
 $loginModeInput.Size = New-Object System.Drawing.Size(220, 26)
 $loginModeInput.Add_SelectedIndexChanged({ Update-Preview })
@@ -748,7 +750,7 @@ $allowCustomServerIpInput.Add_CheckedChanged({ Update-Preview })
 $form.Controls.Add($allowCustomServerIpInput)
 
 $loginModeHint = New-Object System.Windows.Forms.Label
-$loginModeHint.Text = '不带后台时管理/API 固定走 101.200.36.10:80；房间数据仍走输入IP的8888。'
+$loginModeHint.Text = '不带后台时管理/API 固定走 101.200.36.103；房间数据仍走输入IP的8888。'
 $loginModeHint.Location = New-Object System.Drawing.Point(366, 158)
 $loginModeHint.Size = New-Object System.Drawing.Size(350, 24)
 $loginModeHint.ForeColor = [System.Drawing.Color]::FromArgb(82, 94, 112)
@@ -926,6 +928,7 @@ $buildButton.Size = New-Object System.Drawing.Size(140, 36)
 $buildButton.BackColor = [System.Drawing.Color]::FromArgb(36, 105, 245)
 $buildButton.ForeColor = [System.Drawing.Color]::White
 $buildButton.FlatStyle = 'Flat'
+$buildButton.FlatAppearance.BorderSize = 0
 $buildButton.Add_Click({ Start-Build })
 $form.Controls.Add($buildButton)
 
@@ -953,6 +956,14 @@ $openApkButton.Add_Click({
 })
 $form.Controls.Add($openApkButton)
 
+foreach ($button in @($testButton, $openButton, $openApkButton, $browseIconButton, $browseButton)) {
+    $button.FlatStyle = 'Flat'
+    $button.BackColor = [System.Drawing.Color]::FromArgb(255, 255, 255)
+    $button.ForeColor = [System.Drawing.Color]::FromArgb(30, 64, 175)
+    $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(147, 197, 253)
+    $button.FlatAppearance.BorderSize = 1
+}
+
 $statusLabel = New-Object System.Windows.Forms.Label
 $statusLabel.Text = '就绪。'
 $statusLabel.Location = New-Object System.Drawing.Point(24, 534)
@@ -975,6 +986,57 @@ $logBox.Font = New-Object System.Drawing.Font('Consolas', 9)
 $logBox.BackColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
 $logBox.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
 $form.Controls.Add($logBox)
+
+$headerPanel = New-Object System.Windows.Forms.Panel
+$headerPanel.Location = New-Object System.Drawing.Point(0, 0)
+$headerPanel.Size = New-Object System.Drawing.Size(860, 76)
+$headerPanel.BackColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
+$form.Controls.Add($headerPanel)
+$headerPanel.SendToBack()
+
+function Add-SectionCard {
+    param(
+        [int]$X,
+        [int]$Y,
+        [int]$W,
+        [int]$H,
+        [string]$Title
+    )
+    $card = New-Object System.Windows.Forms.Panel
+    $card.Location = New-Object System.Drawing.Point($X, $Y)
+    $card.Size = New-Object System.Drawing.Size($W, $H)
+    $card.BackColor = [System.Drawing.Color]::White
+    $card.BorderStyle = 'FixedSingle'
+    $form.Controls.Add($card)
+    $card.SendToBack()
+
+}
+
+Add-SectionCard 18 82 800 112 '服务器配置'
+Add-SectionCard 18 186 800 286 '应用品牌'
+Add-SectionCard 18 478 800 108 '输出与打包'
+Add-SectionCard 18 594 800 226 '构建日志'
+
+foreach ($control in $form.Controls) {
+    if ($control -is [System.Windows.Forms.TextBox] -and $control -ne $logBox) {
+        $control.BorderStyle = 'FixedSingle'
+        $control.BackColor = [System.Drawing.Color]::FromArgb(248, 250, 252)
+        $control.ForeColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
+    } elseif ($control -is [System.Windows.Forms.ComboBox]) {
+        $control.BackColor = [System.Drawing.Color]::FromArgb(248, 250, 252)
+        $control.ForeColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
+    } elseif ($control -is [System.Windows.Forms.Label] -and $control -ne $title -and $control -ne $subtitle -and $control -ne $previewLabel) {
+        $control.ForeColor = [System.Drawing.Color]::FromArgb(51, 65, 85)
+    }
+}
+
+$title.BringToFront()
+$subtitle.BringToFront()
+$previewLabel.BringToFront()
+$buildButton.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
+$buildButton.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9, [System.Drawing.FontStyle]::Bold)
+$statusLabel.ForeColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
+$progress.ForeColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 900

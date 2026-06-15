@@ -94,7 +94,6 @@ public class MainActivity extends Activity {
     private Spinner fpsSpinner;
     private Button minionFixButton;
     private Button roomSelectButton;
-    private Button roomArrowButton;
     private Button connectRoomButton;
     private ScrollView roomListScroll;
     private LinearLayout roomListContent;
@@ -126,6 +125,7 @@ public class MainActivity extends Activity {
     private boolean updateBlocked;
     private boolean booting;
     private boolean loadingRooms;
+    private boolean remoteServerListLoaded;
     private String activeApiBase = DEFAULT_API_BASE;
     private String bundledApiBase = "";
     private String bundledServerHost = "";
@@ -181,11 +181,10 @@ public class MainActivity extends Activity {
         applyThemeColors();
         applySecureMode();
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 10);
-        if (!isFrontendOnlyMode()) loadAppLinks();
+        loadAppLinks();
         booting = true;
         showStartupPage();
-        if (isFrontendOnlyMode()) enterWithoutLogin("纯前端模式，已免登录进入主页");
-        else checkRemoteConfig(false, false);
+        checkRemoteConfig(false, false);
         handleAutoFitIntent(getIntent());
     }
 
@@ -199,7 +198,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (!isFrontendOnlyMode()) checkRemoteConfig(false, false);
+        checkRemoteConfig(false, false);
         if (pendingOverlayStart && (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this))) {
             pendingOverlayStart = false;
             startOverlay();
@@ -334,216 +333,14 @@ public class MainActivity extends Activity {
     }
 
     private void showUpdateNotes() {
-        int lastSeen = prefs.getInt("last_seen_version", 0);
-        if (lastSeen >= CURRENT_VERSION_CODE) return;
-        prefs.edit().putInt("last_seen_version", CURRENT_VERSION_CODE).apply();
-        String notes = "v6.1.11 更新说明\n\n"
-            + "▶ 新增一键适配，自动调整小地图大小和位置\n"
-            + "▶ 新增截屏识别小地图功能（需授权截屏权限）\n"
-            + "▶ 技能面板新增间距调节，缩放和间距分开控制\n"
-            + "▶ 技能面板图标显示修复，缩放不再丢失图标\n"
-            + "▶ 对方死亡后地图上不再显示头像，技能面板保留\n"
-            + "▶ 加减号微调精度修复，每次加减1单位\n"
-            + "▶ 悬浮窗房间列表支持下拉滑动\n"
-            + "▶ 主页房间号背景改为透明\n"
-            + "▶ 点击刷新房间立即显示状态反馈";
-        new android.app.AlertDialog.Builder(this)
-            .setTitle("更新说明")
-            .setMessage(notes)
-            .setPositiveButton("知道了", null)
-            .show();
+        // Update notes are disabled for the streamlined app home page.
     }
 
     private void showRadarPage() {
-        if (useMgRadarUi()) {
-            showMgRadarPageFixed();
-            return;
-        }
-        LinearLayout root = createPlainRoot("王者荣耀小地图");
-        showUpdateNotes();
-
-        LinearLayout roomSelectRow = new LinearLayout(this);
-        roomSelectRow.setOrientation(LinearLayout.HORIZONTAL);
-        roomSelectButton = makeSmallButton(roomSelectLabel(), this::toggleRoomList);
-        roomSelectButton.setGravity(Gravity.CENTER_VERTICAL);
-        roomSelectButton.setPadding(dp(12), 0, dp(12), 0);
-        roomSelectButton.setTextSize(14);
-        roomSelectRow.addView(roomSelectButton, new LinearLayout.LayoutParams(0, dp(54), 1));
-        roomCountBadge = label("0间");
-        roomCountBadge.setGravity(Gravity.CENTER);
-        roomCountBadge.setTextColor(primaryText);
-        roomCountBadge.setTextSize(13);
-        LinearLayout.LayoutParams countLp = new LinearLayout.LayoutParams(dp(52), dp(54));
-        countLp.leftMargin = dp(8);
-        roomSelectRow.addView(roomCountBadge, countLp);
-        roomArrowButton = makeSmallButton("v", this::toggleRoomList);
-        LinearLayout.LayoutParams arrowLp = new LinearLayout.LayoutParams(dp(50), dp(54));
-        arrowLp.leftMargin = dp(8);
-        roomSelectRow.addView(roomArrowButton, arrowLp);
-        Button refreshRoomsButton = makeSmallButton("刷新", this::refreshAllRooms);
-        LinearLayout.LayoutParams refreshLp = new LinearLayout.LayoutParams(dp(62), dp(54));
-        refreshLp.leftMargin = dp(8);
-        roomSelectRow.addView(refreshRoomsButton, refreshLp);
-        root.addView(roomSelectRow, lpTop(-2, 26));
-
-        LinearLayout roomListRow = new LinearLayout(this);
-        roomListRow.setOrientation(LinearLayout.HORIZONTAL);
-        roomListRow.setGravity(Gravity.TOP);
-        roomListScroll = new ScrollView(this);
-        roomListScroll.setFillViewport(false);
-        roomListScroll.setNestedScrollingEnabled(true);
-        roomListScroll.setVisibility(View.GONE);
-        roomListScroll.setBackground(makeStrokeBox(0x33ffffff, borderColor, dp(8)));
-        roomListContent = new LinearLayout(this);
-        roomListContent.setOrientation(LinearLayout.VERTICAL);
-        roomListContent.setPadding(dp(5), dp(5), dp(5), dp(5));
-        roomListScroll.addView(roomListContent, new ScrollView.LayoutParams(-1, -2));
-        roomListRow.addView(roomListScroll, new LinearLayout.LayoutParams(0, -2, 1));
-        root.addView(roomListRow, lpTop(-2, 6));
-
-        connectRoomButton = makeButton(connectRoomButtonText());
-        connectRoomButton.setOnClickListener(v -> startOverlay());
-        root.addView(connectRoomButton, lpTop(48, 12));
-        updateConnectRoomButton();
-
-        minionFixButton = makeButton(minionFixText());
-        minionFixButton.setOnClickListener(v -> cycleMinionLaneFix());
-        applyMinionFixButtonStyle();
-        root.addView(minionFixButton, lpTop(48, 12));
-
-        root.addView(switchRow("显示技能状态", "开启后在小地图右侧显示英雄大招和技能状态", prefs.getBoolean("show_skill_panel", true), on -> {
-            prefs.edit().putBoolean("show_skill_panel", on).apply();
-            setOverlaySkillPanel(on);
-            setStatus(on ? "技能状态已显示" : "技能状态已隐藏");
-        }), lpTop(-2, 24));
-        root.addView(switchRow("防截图", "开启后悬浮窗内容不会被截图捕获", secureMode, on -> {
-            secureMode = on;
-            prefs.edit().putBoolean("secure_mode", secureMode).apply();
-            applySecureMode();
-            setStatus(secureMode ? "防截图已开启" : "防截图已关闭");
-        }), lpTop(-2, 20));
-
-        Button capturePermBtn = makeButton(NativeOverlayService.sProjectionData != null ? "截屏权限已授权 ✓" : "授权截屏(一键适配)");
-capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
-        root.addView(capturePermBtn, lpTop(46, 10));
-
-        statusText = status(root);
-        setStatus("正在读取房间...");
-        startOnlineHeartbeat();
-        if (fixedBundledServer) loadBundledServerOnly();
-        else loadPublicServers();
+        showMgRadarPageFixed();
     }
 
-    private boolean useMgRadarUi() {
-        return true;
-    }
 
-    private void showMgRadarPage() {
-        LinearLayout root = createPlainRoot(BuildConfig.APP_HOME_TITLE);
-        showUpdateNotes();
-
-        LinearLayout nav = new LinearLayout(this);
-        nav.setOrientation(LinearLayout.HORIZONTAL);
-        nav.setPadding(dp(4), dp(4), dp(4), dp(4));
-        nav.setBackground(makeStrokeBox(0xaa07111f, 0xff38bdf8, dp(18)));
-        nav.addView(mgNavButton("绘制", this::startOverlay), new LinearLayout.LayoutParams(0, dp(34), 1));
-        nav.addView(mgNavButton("设置", this::showThemeDialog), new LinearLayout.LayoutParams(0, dp(34), 1));
-        nav.addView(mgNavButton("触摸", () -> {
-            setOverlayAdjustMode(true);
-            setStatus("已打开悬浮窗调节");
-        }), new LinearLayout.LayoutParams(0, dp(34), 1));
-        nav.addView(mgNavButton("基础", this::refreshAllRooms), new LinearLayout.LayoutParams(0, dp(34), 1));
-        nav.addView(mgNavButton("菜单", this::showMainMenu), new LinearLayout.LayoutParams(0, dp(34), 1));
-        root.addView(nav, lpTop(-2, 14));
-
-        LinearLayout roomCard = mgSection(root, "房间共享", "选择房间并刷新共享数据");
-        LinearLayout roomSelectRow = new LinearLayout(this);
-        roomSelectRow.setOrientation(LinearLayout.HORIZONTAL);
-        roomSelectButton = makeSmallButton(roomSelectLabel(), this::toggleRoomList);
-        roomSelectButton.setGravity(Gravity.CENTER_VERTICAL);
-        roomSelectButton.setPadding(dp(12), 0, dp(12), 0);
-        roomSelectButton.setTextSize(14);
-        roomSelectRow.addView(roomSelectButton, new LinearLayout.LayoutParams(0, dp(54), 1));
-        roomCountBadge = label("0间");
-        roomCountBadge.setGravity(Gravity.CENTER);
-        roomCountBadge.setTextColor(primaryText);
-        roomCountBadge.setTextSize(13);
-        LinearLayout.LayoutParams countLp = new LinearLayout.LayoutParams(dp(52), dp(54));
-        countLp.leftMargin = dp(8);
-        roomSelectRow.addView(roomCountBadge, countLp);
-        roomArrowButton = makeSmallButton("v", this::toggleRoomList);
-        LinearLayout.LayoutParams arrowLp = new LinearLayout.LayoutParams(dp(50), dp(54));
-        arrowLp.leftMargin = dp(8);
-        roomSelectRow.addView(roomArrowButton, arrowLp);
-        Button refreshRoomsButton = makeSmallButton("刷新", this::refreshAllRooms);
-        LinearLayout.LayoutParams refreshLp = new LinearLayout.LayoutParams(dp(62), dp(54));
-        refreshLp.leftMargin = dp(8);
-        roomSelectRow.addView(refreshRoomsButton, refreshLp);
-        roomCard.addView(roomSelectRow, lpTop(-2, 10));
-
-        LinearLayout roomListRow = new LinearLayout(this);
-        roomListRow.setOrientation(LinearLayout.HORIZONTAL);
-        roomListRow.setGravity(Gravity.TOP);
-        roomListScroll = new ScrollView(this);
-        roomListScroll.setFillViewport(false);
-        roomListScroll.setNestedScrollingEnabled(true);
-        roomListScroll.setVisibility(View.GONE);
-        roomListScroll.setBackground(makeStrokeBox(0x33020617, 0x6638bdf8, dp(10)));
-        roomListContent = new LinearLayout(this);
-        roomListContent.setOrientation(LinearLayout.VERTICAL);
-        roomListContent.setPadding(dp(5), dp(5), dp(5), dp(5));
-        roomListScroll.addView(roomListContent, new ScrollView.LayoutParams(-1, -2));
-        roomListRow.addView(roomListScroll, new LinearLayout.LayoutParams(0, -2, 1));
-        roomCard.addView(roomListRow, lpTop(-2, 6));
-
-        LinearLayout drawCard = mgSection(root, "绘制控制", "启动雷达、帧率、兵线和技能显示");
-        connectRoomButton = makeButton(connectRoomButtonText());
-        connectRoomButton.setOnClickListener(v -> startOverlay());
-        drawCard.addView(connectRoomButton, lpTop(46, 10));
-        updateConnectRoomButton();
-
-        minionFixButton = makeButton(minionFixText());
-        minionFixButton.setOnClickListener(v -> cycleMinionLaneFix());
-        applyMinionFixButtonStyle();
-        drawCard.addView(minionFixButton, lpTop(46, 10));
-
-        drawCard.addView(switchRow("显示技能状态", "开启后在小地图右侧显示英雄大招和技能状态", prefs.getBoolean("show_skill_panel", true), on -> {
-            prefs.edit().putBoolean("show_skill_panel", on).apply();
-            setOverlaySkillPanel(on);
-            setStatus(on ? "技能状态已显示" : "技能状态已隐藏");
-        }), lpTop(-2, 16));
-        drawCard.addView(switchRow("防截图", "开启后悬浮窗内容不会被截图捕获", secureMode, on -> {
-            secureMode = on;
-            prefs.edit().putBoolean("secure_mode", secureMode).apply();
-            applySecureMode();
-            setStatus(secureMode ? "防截图已开启" : "防截图已关闭");
-        }), lpTop(-2, 12));
-
-        LinearLayout toolCard = mgSection(root, "校准工具", "适配小地图、调节悬浮窗和复位绘制");
-        Button capturePermBtn = makeButton(NativeOverlayService.sProjectionData != null ? "截屏权限已授权" : "授权截屏 / 一键适配");
-capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
-        toolCard.addView(capturePermBtn, lpTop(46, 10));
-
-        LinearLayout toolRow = new LinearLayout(this);
-        toolRow.setOrientation(LinearLayout.HORIZONTAL);
-        toolRow.addView(makeSmallButton("悬浮调节", () -> {
-            setOverlayAdjustMode(true);
-            setStatus("已打开悬浮窗调节");
-        }), new LinearLayout.LayoutParams(0, dp(42), 1));
-        LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(0, dp(42), 1);
-        resetLp.leftMargin = dp(8);
-        toolRow.addView(makeSmallButton("复位绘制", this::resetOverlay), resetLp);
-        LinearLayout.LayoutParams themeLp = new LinearLayout.LayoutParams(0, dp(42), 1);
-        themeLp.leftMargin = dp(8);
-        toolRow.addView(makeSmallButton("主题", this::showThemeDialog), themeLp);
-        toolCard.addView(toolRow, lpTop(-2, 10));
-
-        statusText = status(root);
-        setStatus("正在读取房间...");
-        startOnlineHeartbeat();
-        if (fixedBundledServer) loadBundledServerOnly();
-        else loadPublicServers();
-    }
 
     private LinearLayout mgSection(LinearLayout root, String titleText, String subtitleText) {
         LinearLayout card = section(root);
@@ -565,44 +362,41 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
 
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.HORIZONTAL);
-        nav.setPadding(dp(4), dp(4), dp(4), dp(4));
-        nav.setBackground(makeStrokeBox(0xaa07111f, 0xff38bdf8, dp(18)));
+        nav.setPadding(dp(5), dp(5), dp(5), dp(5));
+        nav.setBackground(makeStrokeBox(0x8830445f, 0x99b9d8ff, dp(18)));
         nav.addView(mgNavButton("\u7ed8\u5236", this::startOverlay), new LinearLayout.LayoutParams(0, dp(34), 1));
         nav.addView(mgNavButton("\u8bbe\u7f6e", this::showThemeDialog), new LinearLayout.LayoutParams(0, dp(34), 1));
-        nav.addView(mgNavButton("\u89e6\u6478", () -> {
-            setOverlayAdjustMode(true);
-            setStatus("\u5df2\u6253\u5f00\u60ac\u6d6e\u7a97\u8c03\u8282");
-        }), new LinearLayout.LayoutParams(0, dp(34), 1));
         nav.addView(mgNavButton("\u57fa\u7840", this::refreshAllRooms), new LinearLayout.LayoutParams(0, dp(34), 1));
         nav.addView(mgNavButton("\u83dc\u5355", this::showMainMenu), new LinearLayout.LayoutParams(0, dp(34), 1));
         root.addView(nav, lpTop(-2, 14));
 
-        addCustomServerIpSection(root);
-
-        LinearLayout roomCard = mgSection(root, "\u623f\u95f4\u5171\u4eab", "\u9009\u62e9\u623f\u95f4\u5e76\u5237\u65b0\u5171\u4eab\u6570\u636e");
+        LinearLayout roomCard = mgSection(root, "\u623f\u95f4\u5171\u4eab", "\u9009\u62e9\u623f\u95f4\uff0c\u4e5f\u53ef\u76f4\u63a5\u6253\u5f00\u60ac\u6d6e\u7a97");
+        addCustomServerIpSection(roomCard);
         LinearLayout roomSelectRow = new LinearLayout(this);
         roomSelectRow.setOrientation(LinearLayout.HORIZONTAL);
         roomSelectButton = makeSmallButton(roomSelectLabel(), this::toggleRoomList);
         roomSelectButton.setGravity(Gravity.CENTER_VERTICAL);
         roomSelectButton.setPadding(dp(12), 0, dp(12), 0);
         roomSelectButton.setTextSize(14);
-        roomSelectRow.addView(roomSelectButton, new LinearLayout.LayoutParams(0, dp(54), 1));
+        roomSelectRow.addView(roomSelectButton, new LinearLayout.LayoutParams(0, dp(46), 1));
         roomCountBadge = label("0\u95f4");
         roomCountBadge.setGravity(Gravity.CENTER);
         roomCountBadge.setTextColor(primaryText);
         roomCountBadge.setTextSize(13);
-        LinearLayout.LayoutParams countLp = new LinearLayout.LayoutParams(dp(52), dp(54));
+        roomCountBadge.setBackground(makeStrokeBox(0x6630445f, 0x88cfe4ff, dp(14)));
+        LinearLayout.LayoutParams countLp = new LinearLayout.LayoutParams(dp(46), dp(46));
         countLp.leftMargin = dp(8);
         roomSelectRow.addView(roomCountBadge, countLp);
-        roomArrowButton = makeSmallButton("v", this::toggleRoomList);
-        LinearLayout.LayoutParams arrowLp = new LinearLayout.LayoutParams(dp(50), dp(54));
-        arrowLp.leftMargin = dp(8);
-        roomSelectRow.addView(roomArrowButton, arrowLp);
-        Button refreshRoomsButton = makeSmallButton("\u5237\u65b0", this::refreshAllRooms);
-        LinearLayout.LayoutParams refreshLp = new LinearLayout.LayoutParams(dp(62), dp(54));
+        Button refreshRoomsButton = makeSmallButton("\u5237\u65b0", this::loadPublicServers);
+        LinearLayout.LayoutParams refreshLp = new LinearLayout.LayoutParams(dp(62), dp(46));
         refreshLp.leftMargin = dp(8);
         roomSelectRow.addView(refreshRoomsButton, refreshLp);
-        roomCard.addView(roomSelectRow, lpTop(-2, 10));
+        roomCard.addView(roomSelectRow, lpTop(-2, 8));
+
+        connectRoomButton = makeButton(connectRoomButtonText());
+        connectRoomButton.setOnClickListener(v -> startOverlay());
+        roomCard.addView(connectRoomButton, lpTop(42, 8));
+        updateConnectRoomButton();
 
         LinearLayout roomListRow = new LinearLayout(this);
         roomListRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -619,22 +413,17 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
         roomListRow.addView(roomListScroll, new LinearLayout.LayoutParams(0, -2, 1));
         roomCard.addView(roomListRow, lpTop(-2, 6));
 
-        LinearLayout drawCard = mgSection(root, "\u7ed8\u5236\u63a7\u5236", "\u542f\u52a8\u96f7\u8fbe\u3001\u5175\u7ebf\u548c\u6280\u80fd\u663e\u793a");
-        connectRoomButton = makeButton(connectRoomButtonText());
-        connectRoomButton.setOnClickListener(v -> startOverlay());
-        drawCard.addView(connectRoomButton, lpTop(46, 10));
-        updateConnectRoomButton();
-
+        LinearLayout drawCard = mgSection(root, "\u7ed8\u5236\u63a7\u5236", "\u5175\u7ebf\u3001\u6280\u80fd\u72b6\u6001\u548c\u9632\u622a\u56fe");
         minionFixButton = makeButton(minionFixText());
         minionFixButton.setOnClickListener(v -> cycleMinionLaneFix());
         applyMinionFixButtonStyle();
-        drawCard.addView(minionFixButton, lpTop(46, 10));
+        drawCard.addView(minionFixButton, lpTop(42, 8));
 
         drawCard.addView(switchRow("\u663e\u793a\u6280\u80fd\u72b6\u6001", "\u5f00\u542f\u540e\u5728\u5c0f\u5730\u56fe\u53f3\u4fa7\u663e\u793a\u82f1\u96c4\u5927\u62db\u548c\u6280\u80fd\u72b6\u6001", prefs.getBoolean("show_skill_panel", true), on -> {
             prefs.edit().putBoolean("show_skill_panel", on).apply();
             setOverlaySkillPanel(on);
             setStatus(on ? "\u6280\u80fd\u72b6\u6001\u5df2\u663e\u793a" : "\u6280\u80fd\u72b6\u6001\u5df2\u9690\u85cf");
-        }), lpTop(-2, 16));
+        }), lpTop(-2, 12));
         drawCard.addView(switchRow("\u9632\u622a\u56fe", "\u5f00\u542f\u540e\u60ac\u6d6e\u7a97\u5185\u5bb9\u4e0d\u4f1a\u88ab\u622a\u56fe\u6355\u83b7", secureMode, on -> {
             secureMode = on;
             prefs.edit().putBoolean("secure_mode", secureMode).apply();
@@ -645,50 +434,48 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
         LinearLayout toolCard = mgSection(root, "\u6821\u51c6\u5de5\u5177", "\u9002\u914d\u5c0f\u5730\u56fe\u3001\u8c03\u8282\u60ac\u6d6e\u7a97\u548c\u590d\u4f4d\u7ed8\u5236");
         Button capturePermBtn = makeButton(NativeOverlayService.sProjectionData != null ? "\u622a\u5c4f\u6743\u9650\u5df2\u6388\u6743" : "\u6388\u6743\u622a\u5c4f / \u4e00\u952e\u9002\u914d");
         capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
-        toolCard.addView(capturePermBtn, lpTop(46, 10));
+        toolCard.addView(capturePermBtn, lpTop(42, 8));
 
         LinearLayout toolRow = new LinearLayout(this);
         toolRow.setOrientation(LinearLayout.HORIZONTAL);
         toolRow.addView(makeSmallButton("\u60ac\u6d6e\u8c03\u8282", () -> {
             setOverlayAdjustMode(true);
             setStatus("\u5df2\u6253\u5f00\u60ac\u6d6e\u7a97\u8c03\u8282");
-        }), new LinearLayout.LayoutParams(0, dp(42), 1));
+        }), new LinearLayout.LayoutParams(0, dp(40), 1));
         LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(0, dp(42), 1);
         resetLp.leftMargin = dp(8);
         toolRow.addView(makeSmallButton("\u590d\u4f4d\u7ed8\u5236", this::resetOverlay), resetLp);
         LinearLayout.LayoutParams themeLp = new LinearLayout.LayoutParams(0, dp(42), 1);
         themeLp.leftMargin = dp(8);
         toolRow.addView(makeSmallButton("\u4e3b\u9898", this::showThemeDialog), themeLp);
-        toolCard.addView(toolRow, lpTop(-2, 10));
+        toolCard.addView(toolRow, lpTop(-2, 8));
 
         statusText = status(root);
         setStatus("\u6b63\u5728\u8bfb\u53d6\u623f\u95f4...");
         startOnlineHeartbeat();
-        if (fixedBundledServer) loadBundledServerOnly();
-        else loadPublicServers();
+        loadBundledServerOnly();
     }
 
     private void addCustomServerIpSection(LinearLayout root) {
         if (!allowCustomServerIp) return;
-        LinearLayout card = mgSection(root, "\u623f\u95f4\u670d\u52a1\u5668", "\u7559\u7a7a\u4f7f\u7528\u6253\u5305IP\uff0c\u586b\u5199\u540e\u8d70\u8f93\u5165IP\u7684 8888/ws");
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         customServerIpInput = makeInput("\u8f93\u5165IP\u6216\u57df\u540d");
         customServerIpInput.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
         customServerIpInput.setText(customServerHost());
-        row.addView(customServerIpInput, new LinearLayout.LayoutParams(0, dp(46), 1));
+        row.addView(customServerIpInput, new LinearLayout.LayoutParams(0, dp(42), 1));
         Button saveButton = makeSmallButton("\u4fdd\u5b58", this::saveCustomServerIpAndRefresh);
-        LinearLayout.LayoutParams saveLp = new LinearLayout.LayoutParams(dp(72), dp(46));
+        LinearLayout.LayoutParams saveLp = new LinearLayout.LayoutParams(dp(66), dp(42));
         saveLp.leftMargin = dp(8);
         row.addView(saveButton, saveLp);
-        card.addView(row, lpTop(-2, 10));
+        root.addView(row, lpTop(-2, 8));
     }
 
     private Button mgNavButton(String text, Runnable action) {
         Button button = makeSmallButton(text, action);
         button.setTextSize(12);
         button.setTextColor(0xffffffff);
-        button.setBackground(makeStrokeBox(0x2215d1e8, 0x6638bdf8, dp(14)));
+        button.setBackground(makeStrokeBox(0x5530445f, 0x88cfe4ff, dp(14)));
         return button;
     }
 
@@ -1036,14 +823,16 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
     }
 
     private void loadPublicServers() {
-        if (fixedBundledServer || hasCustomServerHost()) {
+        if (hasCustomServerHost()) {
             loadBundledServerOnly();
+            reportCustomServerToBackend();
             return;
         }
         if (!isConfiguredApiBase(activeApiBase)) {
             setStatus("请先填写后台地址");
             return;
         }
+        remoteServerListLoaded = false;
         String url = apiUrl("/api/index.php?module=game_servers&action=public") + (appOnlyLogin ? "&public_account=1" : "");
         Request request = new Request.Builder().url(url).get().build();
         http.newCall(request).enqueue(new Callback() {
@@ -1072,8 +861,8 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
                             if (host.length() > 0) next.add(new GameServer(name.length() > 0 ? name : ("服务器" + (i + 1)), host, port));
                         }
                     }
-                    if (next.isEmpty()) next.add(new GameServer("默认服务器", defaultServerHost(), defaultServerPort()));
                     runOnUiThread(() -> {
+                        remoteServerListLoaded = true;
                         servers.clear();
                         servers.addAll(next);
                         refreshAllRooms();
@@ -1093,8 +882,16 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
     private int pendingRoomServerCount = 0;
 
     private void loadBundledServerOnly() {
+        remoteServerListLoaded = false;
         servers.clear();
         servers.add(new GameServer("默认服务器", defaultServerHost(), defaultServerPort()));
+        refreshAllRooms();
+    }
+
+    private void loadCustomServerOnly(String host) {
+        remoteServerListLoaded = false;
+        servers.clear();
+        servers.add(new GameServer("自定义服务器", host, defaultServerPort()));
         refreshAllRooms();
     }
 
@@ -1106,12 +903,13 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
         if (roomSelectButton != null) roomSelectButton.setText("正在获取房间号");
         if (roomListScroll != null) {
             roomListScroll.setVisibility(View.VISIBLE);
-            if (roomArrowButton != null) roomArrowButton.setText("^");
         }
         renderRooms(new ArrayList<>());
         if (servers.isEmpty()) {
-            setStatus("暂无服务器，正在读取后台服务器");
-            loadPublicServers();
+            loadingRooms = false;
+            renderRooms(new ArrayList<>());
+            setStatus(remoteServerListLoaded ? "后台暂无可用服务器" : "暂无服务器，正在读取后台服务器");
+            if (!remoteServerListLoaded) loadPublicServers();
             return;
         }
         pendingRoomServerCount = servers.size();
@@ -1244,7 +1042,6 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
         if (roomListScroll == null) return;
         boolean show = roomListScroll.getVisibility() != View.VISIBLE;
         roomListScroll.setVisibility(show ? View.VISIBLE : View.GONE);
-        if (roomArrowButton != null) roomArrowButton.setText(show ? "^" : "v");
     }
 
     private void selectRoomLabel(String labelText) {
@@ -1254,9 +1051,9 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
             prefs.edit().putString("selected_room", selectedRoomLabel).apply();
             if (roomSelectButton != null) roomSelectButton.setText(roomSelectLabel());
             updateConnectRoomButton();
+            reportRoomToBackend(selectedRoomLabel, selectedRoomServerAddress());
         }
         if (roomListScroll != null) roomListScroll.setVisibility(View.GONE);
-        if (roomArrowButton != null) roomArrowButton.setText("v");
     }
 
     private String roomSelectLabel() {
@@ -1291,6 +1088,7 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
             String mapped = roomServerAddresses.get(selectedRoomLabel);
             if (mapped != null && mapped.length() > 0) return mapped;
         }
+        if (servers.isEmpty() && remoteServerListLoaded) return "";
         return servers.isEmpty() ? defaultServerHost() + ":" + defaultServerPort() : servers.get(0).address();
     }
 
@@ -1320,19 +1118,70 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
         SharedPreferences.Editor editor = prefs.edit();
         if (next.length() == 0) {
             editor.remove("custom_server_host");
-            setStatus("\u5df2\u6062\u590d\u4f7f\u7528\u6253\u5305IP\uff0c\u6b63\u5728\u5237\u65b0\u623f\u95f4...");
+            setStatus("IP已清空，正在获取后台服务器列表...");
         } else {
             editor.putString("custom_server_host", next);
-            setStatus("\u5df2\u5207\u6362\u623f\u95f4\u670d\u52a1\u5668 " + next + ":" + defaultServerPort() + "\uff0c\u6b63\u5728\u5237\u65b0...");
+            setStatus("已保存并上报服务器 " + next + ":" + defaultServerPort() + "，正在获取当前IP房间号...");
         }
         editor.remove("selected_room").apply();
         selectedRoomLabel = "";
         customServerIpInput.setText(next);
-        loadBundledServerOnly();
+        if (next.length() > 0) {
+            reportCustomServerToBackend();
+            loadCustomServerOnly(next);
+        } else {
+            loadPublicServers();
+        }
     }
 
     private String buildWsUrl(String value) {
         return "ws://" + normalizeHostPort(value) + "/ws";
+    }
+
+    private void reportCustomServerToBackend() {
+        if (!isConfiguredApiBase(activeApiBase)) return;
+        String host = customServerHost();
+        if (host.length() == 0) return;
+        JSONObject body = new JSONObject();
+        try {
+            body.put("host", host);
+            body.put("port", defaultServerPort());
+            body.put("username", prefs.getString("username", username()));
+        } catch (Exception ignored) {}
+        Request request = new Request.Builder()
+                .url(apiUrl("/api/index.php?module=game_servers&action=app_report"))
+                .post(RequestBody.create(body.toString(), JSON))
+                .build();
+        http.newCall(request).enqueue(new Callback() {
+            @Override public void onFailure(Call call, java.io.IOException e) {}
+            @Override public void onResponse(Call call, Response response) { response.close(); }
+        });
+    }
+
+    private void reportRoomToBackend(String room, String serverAddress) {
+        if (!isConfiguredApiBase(activeApiBase)) return;
+        String cleanRoom = cleanRoomLabel(room);
+        if (cleanRoom.length() == 0) return;
+        JSONObject body = new JSONObject();
+        try {
+            body.put("room", cleanRoom);
+            body.put("ip", hostOnly(serverAddress));
+        } catch (Exception ignored) {}
+        Request request = new Request.Builder()
+                .url(apiUrl("/api/index.php?module=room_report"))
+                .post(RequestBody.create(body.toString(), JSON))
+                .build();
+        http.newCall(request).enqueue(new Callback() {
+            @Override public void onFailure(Call call, java.io.IOException e) {}
+            @Override public void onResponse(Call call, Response response) { response.close(); }
+        });
+    }
+
+    private String hostOnly(String value) {
+        String raw = value == null ? "" : normalizeHostPort(value);
+        int colon = raw.indexOf(':');
+        if (colon >= 0) raw = raw.substring(0, colon);
+        return raw.trim();
     }
 
     private void login() {
@@ -1552,15 +1401,18 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
         }
         String server = selectedRoomServerAddress();
         String room = selectedRoom();
+        if (room.length() == 0 || !rooms.contains(room)) {
+            setStatus(loadingRooms ? "\u6b63\u5728\u83b7\u53d6\u623f\u95f4\u53f7\uff0c\u8bf7\u7a0d\u540e\u518d\u8fde\u63a5" : "\u8bf7\u5148\u5237\u65b0\u5e76\u9009\u62e9\u83b7\u53d6\u5230\u7684\u623f\u95f4\u53f7");
+            if (roomListScroll != null) roomListScroll.setVisibility(View.VISIBLE);
+            if (!loadingRooms && rooms.isEmpty()) refreshAllRooms();
+            return;
+        }
         if (server.length() == 0) {
             setStatus("正在读取后台服务器，请稍后再试");
             loadPublicServers();
             return;
         }
-        if (room.length() == 0) {
-            setStatus("请先从房间列表选择房间号");
-            return;
-        }
+        reportRoomToBackend(room, server);
         Intent intent = new Intent(this, NativeOverlayService.class);
         intent.putExtra("site", server);
         intent.putExtra("room", room);
@@ -1642,16 +1494,17 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
 
     private String connectRoomButtonText() {
         String room = selectedRoom();
-        if (room.length() > 0) return "连接房间 " + room;
-        return loadingRooms ? "正在获取房间" : "请选择房间";
+        if (room.length() > 0 && rooms.contains(room)) return "\u8fde\u63a5\u623f\u95f4 " + room;
+        return loadingRooms ? "\u6b63\u5728\u83b7\u53d6\u623f\u95f4" : "\u8bf7\u9009\u62e9\u623f\u95f4\u53f7";
     }
 
     private void updateConnectRoomButton() {
         if (connectRoomButton == null) return;
-        boolean ready = selectedRoom().length() > 0;
+        String room = selectedRoom();
+        boolean canConnect = room.length() > 0 && rooms.contains(room);
         connectRoomButton.setText(connectRoomButtonText());
-        connectRoomButton.setEnabled(ready);
-        connectRoomButton.setAlpha(ready ? 1f : 0.52f);
+        connectRoomButton.setEnabled(canConnect);
+        connectRoomButton.setAlpha(canConnect ? 1f : 0.55f);
     }
 
     private String normalizeHostPort(String value) {
@@ -1674,7 +1527,6 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
 
     private void startOnlineHeartbeat() {
         stopOnlineHeartbeat();
-        if (isFrontendOnlyMode()) return;
         heartbeatRunnable = new Runnable() {
             @Override
             public void run() {
@@ -1693,7 +1545,6 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
     }
 
     private void sendOnlineHeartbeat() {
-        if (isFrontendOnlyMode()) return;
         if (!isConfiguredApiBase(activeApiBase)) return;
         JSONObject body = new JSONObject();
         try {
@@ -1712,7 +1563,6 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
     }
 
     private void loadAppLinks() {
-        if (isFrontendOnlyMode()) return;
         if (!isConfiguredApiBase(activeApiBase)) return;
         Request request = new Request.Builder().url(apiUrl("/api/index.php?module=app_settings&action=public")).get().build();
         http.newCall(request).enqueue(new Callback() {
@@ -1987,10 +1837,10 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
     private LinearLayout section(LinearLayout root) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(16), dp(16), dp(16), dp(16));
-        card.setBackground(makeStrokeBox(cardBg, borderColor, dp(14)));
+        card.setPadding(dp(14), dp(13), dp(14), dp(13));
+        card.setBackground(makeStrokeBox(cardBg, borderColor, dp(16)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.topMargin = dp(12);
+        lp.topMargin = dp(10);
         root.addView(card, lp);
         return card;
     }
@@ -2076,9 +1926,9 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
         Button button = new Button(this);
         button.setText(text);
         button.setTextColor(Color.WHITE);
-        button.setTextSize(15);
+        button.setTextSize(14);
         button.setAllCaps(false);
-        button.setBackground(makeGradient(0xff2563eb, 0xff7c3aed, dp(10)));
+        button.setBackground(makeStrokeBox(0x7730445f, 0x99cfe4ff, dp(12)));
         return button;
     }
 
@@ -2104,8 +1954,8 @@ capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
 
     private void applyThemeColors() {
         if (themeIndex == 0) {
-            bgStart = 0xfff8fafc; bgEnd = 0xffdbeafe; cardBg = 0xffffffff; borderColor = 0xff93c5fd;
-            primaryText = 0xff0f172a; secondaryText = 0xff334155; inputBg = 0xffffffff; inputText = 0xff0f172a; hintText = 0xff64748b;
+            bgStart = 0xffeef5ff; bgEnd = 0xffd9e7f8; cardBg = 0xcc405873; borderColor = 0x99b9d8ff;
+            primaryText = 0xffffffff; secondaryText = 0xffe4f1ff; inputBg = 0x77455670; inputText = 0xffffffff; hintText = 0xffd7e7f8;
         } else if (themeIndex == 2) {
             bgStart = 0xffe0f2fe; bgEnd = 0xffeff6ff; cardBg = 0xeeffffff; borderColor = 0xff60a5fa;
             primaryText = 0xff0f172a; secondaryText = 0xff1e3a8a; inputBg = 0xffffffff; inputText = 0xff0f172a; hintText = 0xff64748b;

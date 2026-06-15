@@ -2951,6 +2951,13 @@ case 'app_remote_config':
 case 'game_servers':
     ensureGameServersTable($pdo);
     if ($action === 'public' || $action === 'list_public' || $action === '') {
+        $where = 'enabled = 1';
+        if (isset($_GET['public_account']) && (int) $_GET['public_account'] === 1) {
+            $where .= ' AND public_account_visible = 1';
+        }
+        $stmt = $pdo->query("SELECT id, name, host, port, last_check_status, last_check_at, last_check_ms, last_check_error FROM game_servers WHERE {$where} ORDER BY sort_order ASC, id ASC");
+        apiJsonResp(0, 'ok', ['list' => $stmt->fetchAll()]);
+        break;
         $host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? '';
         $host = preg_replace('/:\d+$/', '', trim((string) $host));
         if ($host === '') $host = getClientIp();
@@ -3065,6 +3072,27 @@ case 'game_servers':
         apiJsonResp(0, '删除成功', ['deleted' => $stmt->rowCount()]);
         break;
     }
+    if ($action === 'batch_toggle') {
+        $ids = [];
+        if (isset($input['ids']) && is_array($input['ids'])) {
+            foreach ($input['ids'] as $rawId) {
+                $rawId = (int) $rawId;
+                if ($rawId > 0) $ids[] = $rawId;
+            }
+            $ids = array_values(array_unique($ids));
+        }
+        $enabled = isset($input['enabled']) ? ((int) $input['enabled'] ? 1 : 0) : 1;
+        if (!$ids) {
+            apiJsonResp(400, '璇锋彁渚涙湇鍔″櫒 ID');
+            exit;
+        }
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $params = array_merge([$enabled], $ids);
+        $stmt = $pdo->prepare('UPDATE game_servers SET enabled = ? WHERE id IN (' . $placeholders . ')');
+        $stmt->execute($params);
+        apiJsonResp(0, '鏇存柊鎴愬姛', ['updated' => $stmt->rowCount()]);
+        break;
+    }
     if ($action === 'toggle') {
         $id = isset($input['id']) ? (int) $input['id'] : 0;
         $enabled = isset($input['enabled']) ? ((int) $input['enabled'] ? 1 : 0) : 1;
@@ -3090,6 +3118,38 @@ case 'game_servers':
         break;
     }
     if ($action === 'test') {
+        if (isset($input['ids']) && is_array($input['ids'])) {
+            $ids = [];
+            foreach ($input['ids'] as $rawId) {
+                $rawId = (int) $rawId;
+                if ($rawId > 0) $ids[] = $rawId;
+            }
+            $ids = array_values(array_unique($ids));
+            if (!$ids) {
+                apiJsonResp(400, '璇锋彁渚涙湇鍔″櫒 ID');
+                exit;
+            }
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $stmt = $pdo->prepare('SELECT id, host, port FROM game_servers WHERE id IN (' . $placeholders . ') ORDER BY sort_order ASC, id ASC');
+            $stmt->execute($ids);
+            $rows = $stmt->fetchAll();
+            if (!$rows) {
+                apiJsonResp(404, '鏈嶅姟鍣ㄤ笉瀛樺湪');
+                exit;
+            }
+            $results = [];
+            $online = 0;
+            $offline = 0;
+            foreach ($rows as $server) {
+                $result = testGameServerTcp($server['host'], $server['port']);
+                if ($result['status'] === 'online') $online++; else $offline++;
+                $upd = $pdo->prepare('UPDATE game_servers SET last_check_status = ?, last_check_at = NOW(), last_check_ms = ?, last_check_error = ? WHERE id = ?');
+                $upd->execute([$result['status'], $result['ms'], $result['error'], (int) $server['id']]);
+                $results[] = ['id' => (int) $server['id'], 'host' => $server['host'], 'port' => (int) $server['port'], 'result' => $result];
+            }
+            apiJsonResp(0, '娴嬭瘯瀹屾垚', ['list' => $results, 'online' => $online, 'offline' => $offline, 'total' => count($results)]);
+            break;
+        }
         $id = isset($input['id']) ? (int) $input['id'] : 0;
         if ($id <= 0) {
             apiJsonResp(400, '请提供服务器 ID');

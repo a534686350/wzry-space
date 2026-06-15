@@ -56,7 +56,7 @@ import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
 public class NativeOverlayService extends Service {
-    private static final int MIN_POLL_DELAY_MS = 33;
+    private static final int MIN_POLL_DELAY_MS = 100;
     private static final int MIN_UI_FRAME_MS = 33;
     public static final String ACTION_ADJUST = "com.qy.wzryoverlay.ADJUST";
     public static final String ACTION_SET_OFFSET = "com.qy.wzryoverlay.SET_OFFSET";
@@ -139,7 +139,6 @@ public class NativeOverlayService extends Service {
         @Override
         public void run() {
             if (!running || webSocket == null) return;
-            webSocket.send("getHome");
             if (roomId != null && roomId.trim().length() > 0) {
                 webSocket.send("web" + System.currentTimeMillis() + "[==]" + roomId.trim());
             }
@@ -961,17 +960,13 @@ public class NativeOverlayService extends Service {
             toggleButton.setMinWidth(0);
             toggleButton.setAlpha(0.82f);
             toggleButton.setBackground(makePanelHeaderBackground());
-            toggleButton.setOnClickListener(v -> {});
-            toggleButton.setOnLongClickListener(v -> {
-                togglePanelVisibility();
-                return true;
-            });
+            toggleButton.setOnClickListener(v -> togglePanelVisibility());
         }
         if (toggleParams == null) {
             int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                     ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                     : WindowManager.LayoutParams.TYPE_PHONE;
-            toggleParams = new WindowManager.LayoutParams(dp(82), dp(24), type,
+            toggleParams = new WindowManager.LayoutParams(dp(110), dp(24), type,
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                     PixelFormat.TRANSLUCENT);
             toggleParams.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
@@ -1039,9 +1034,16 @@ public class NativeOverlayService extends Service {
     private void updatePanelVisibility() {
         if (adjustPanel != null) adjustPanel.setVisibility(panelVisible ? View.VISIBLE : View.GONE);
         if (toggleButton != null) {
-            toggleButton.setText(panelVisible ? BuildConfig.APP_NAME + " -" : BuildConfig.APP_NAME + " +");
+            toggleButton.setText(panelBrandText() + (panelVisible ? " -" : " +"));
             toggleButton.setAlpha(panelVisible ? 0.82f : 0.55f);
         }
+    }
+
+    private String panelBrandText() {
+        String title = BuildConfig.APP_PANEL_TITLE == null ? "" : BuildConfig.APP_PANEL_TITLE.trim();
+        if (title.length() > 0) return title;
+        String name = BuildConfig.APP_NAME == null ? "" : BuildConfig.APP_NAME.trim();
+        return name.length() > 0 ? name : "LD";
     }
 
     private void updateRadarTouchMode() {
@@ -1080,7 +1082,7 @@ public class NativeOverlayService extends Service {
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.VERTICAL);
         nav.setPadding(0, 0, dp(6), 0);
-        TextView logo = panelText(BuildConfig.APP_NAME, 20, true);
+        TextView logo = panelText(panelBrandText(), 20, true);
         logo.setTextColor(0xffe8fbff);
         logo.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC));
         logo.setGravity(Gravity.CENTER);
@@ -1133,12 +1135,17 @@ public class NativeOverlayService extends Service {
         updatePanelButtons();
         if (activeMainPage == 0) {
             TextView title = panelText(BuildConfig.APP_PANEL_TITLE, 13, true);
+            title.setSingleLine(true);
             title.setTextColor(0xffffffff);
             panelContent.addView(title, new LinearLayout.LayoutParams(-1, dp(22)));
-            TextView channel = panelText(BuildConfig.APP_PANEL_CHANNEL, 12, true);
+            TextView channel = panelText(BuildConfig.APP_PANEL_CHANNEL, 10, true);
+            channel.setSingleLine(true);
+            channel.setEllipsize(android.text.TextUtils.TruncateAt.END);
             channel.setTextColor(0xffff5b66);
             panelContent.addView(channel, new LinearLayout.LayoutParams(-1, dp(21)));
             TextView status = panelText(BuildConfig.APP_PANEL_STATUS, 12, true);
+            status.setSingleLine(true);
+            status.setEllipsize(android.text.TextUtils.TruncateAt.END);
             status.setTextColor(0xff4ade80);
             panelContent.addView(status, new LinearLayout.LayoutParams(-1, dp(21)));
             int fps = frameDelayMs <= 0 ? 0 : Math.round(1000f / frameDelayMs);

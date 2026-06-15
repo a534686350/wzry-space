@@ -150,10 +150,8 @@ public class RadarView extends View {
         for (String id : ordered) {
             RadarData.Hero hero = incoming.get(id);
             if (hero == null) {
-                RadarData.Hero last = lastHeroes.get(id);
-                if (last == null) continue;
-                hero = copyHero(last);
-                hero.stale = true;
+                lastHeroes.remove(id);
+                continue;
             }
             if (hero.dead || hero.hp <= 0) {
                 lastHeroes.remove(id);
@@ -385,9 +383,9 @@ public class RadarView extends View {
             float iconRadius = clamp(dp(12) * heroIconScale, dp(3.5f), dp(26));
             float bgRadius = iconRadius + Math.max(dp(1), iconRadius * 0.18f);
             float borderRadius = iconRadius + Math.max(dp(1), iconRadius * 0.12f);
-            boolean lowHp = hero.hp > 0 && hero.hp <= 35f;
+            float hpPercent = clamp(hero.hp, 0f, 100f) / 100f;
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(hero.dead ? 0xdd64748b : (lowHp ? 0xeeef4444 : 0xcc020617));
+            paint.setColor(hero.dead ? 0xdd64748b : 0xcc020617);
             canvas.drawCircle(x, y, bgRadius, paint);
             if (icon != null) {
                 drawCircularBitmap(canvas, icon, x, y, iconRadius);
@@ -396,10 +394,24 @@ public class RadarView extends View {
                 canvas.drawCircle(x, y, iconRadius, paint);
             }
             paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(dp(2));
-            paint.setColor(hero.dead ? 0xff94a3b8 : (lowHp ? 0xffff1744 : fill));
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeWidth(Math.max(dp(1), iconRadius * 0.1f));
+            paint.setColor(fill);
             canvas.drawCircle(x, y, borderRadius, paint);
 
+            float barW = Math.max(dp(14), iconRadius * 1.85f);
+            float barH = Math.max(dp(3), iconRadius * 0.22f);
+            float barTop = y + iconRadius + Math.max(dp(2), iconRadius * 0.2f);
+            RectF barBg = new RectF(x - barW / 2f, barTop, x + barW / 2f, barTop + barH);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0xffcbd5e1);
+            canvas.drawRoundRect(barBg, barH / 2f, barH / 2f, paint);
+            if (hpPercent > 0f) {
+                RectF hpBar = new RectF(barBg.left, barBg.top, barBg.left + barW * hpPercent, barBg.bottom);
+                paint.setColor(hpPercent <= 0.35f ? 0xffff1744 : 0xffef4444);
+                canvas.drawRoundRect(hpBar, barH / 2f, barH / 2f, paint);
+            }
+            paint.setStrokeCap(Paint.Cap.BUTT);
         }
     }
 
@@ -427,7 +439,7 @@ public class RadarView extends View {
         float ultTop = cy - avatarR - ultBox - dp(4) * s;
         RectF ultRect = new RectF(cx - ultBox / 2f, ultTop, cx + ultBox / 2f, ultTop + ultBox);
         Bitmap ultIcon = iconCache != null ? iconCache.getUlt(hero.id, this::invalidate) : null;
-        boolean ultLocked = hero.level < 4;
+        boolean ultLocked = hero.level > 0 && hero.level < 4;
         boolean ultCooling = hero.ultCd > 0;
         if (ultIcon != null) {
             drawRoundBitmap(canvas, ultIcon, ultRect, dp(3) * s);
@@ -442,7 +454,7 @@ public class RadarView extends View {
         }
         if (hero.dead || ultLocked || ultCooling) {
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(hero.dead || ultLocked ? 0xaa020617 : 0x77020617);
+            paint.setColor(hero.dead || ultLocked ? 0xaa020617 : 0xbb334155);
             canvas.drawRoundRect(ultRect, dp(3) * s, dp(3) * s, paint);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(dp(1) * s);
@@ -490,9 +502,9 @@ public class RadarView extends View {
             paint.setColor(0x99ffffff);
             canvas.drawRoundRect(r, dp(3) * s, dp(3) * s, paint);
         }
-        if (hero.dead) {
+        if (hero.dead || hero.summonerCd > 0) {
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(0x99020617);
+            paint.setColor(hero.dead ? 0x99020617 : 0xbb334155);
             canvas.drawRoundRect(r, dp(3) * s, dp(3) * s, paint);
         }
         textPaint.setTextSize(Math.max(dp(8) * s, box * 0.5f));
