@@ -45,9 +45,14 @@ import android.widget.TextView;
 import android.widget.ScrollView;
 
 import java.io.InputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.nio.ByteBuffer;
 
 import java.util.ArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -56,8 +61,9 @@ import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
 public class NativeOverlayService extends Service {
-    private static final int MIN_POLL_DELAY_MS = 100;
-    private static final int MIN_UI_FRAME_MS = 33;
+    private static final int DEFAULT_POLL_FPS = 60;
+    private static final int MIN_POLL_DELAY_MS = 1;
+    private static final int MIN_UI_FRAME_MS = Math.round(1000f / DEFAULT_POLL_FPS);
     public static final String ACTION_ADJUST = "com.qy.wzryoverlay.ADJUST";
     public static final String ACTION_SET_OFFSET = "com.qy.wzryoverlay.SET_OFFSET";
     public static final String ACTION_ZOOM = "com.qy.wzryoverlay.ZOOM";
@@ -69,6 +75,7 @@ public class NativeOverlayService extends Service {
     public static final String ACTION_SET_OVERLAY_BOUNDS = "com.qy.wzryoverlay.SET_OVERLAY_BOUNDS";
     public static final String ACTION_SET_ADJUST_MODE = "com.qy.wzryoverlay.SET_ADJUST_MODE";
     public static final String ACTION_SET_SKILL_PANEL = "com.qy.wzryoverlay.SET_SKILL_PANEL";
+    public static final String ACTION_SET_SECURE_MODE = "com.qy.wzryoverlay.SET_SECURE_MODE";
     public static final String ACTION_AUTO_FIT_CAPTURE = "com.qy.wzryoverlay.AUTO_FIT_CAPTURE";
     private static final int MIN_OVERLAY_DP = 80;
     private static final int MAX_OVERLAY_DP = 520;
@@ -93,8 +100,12 @@ public class NativeOverlayService extends Service {
     private Button toggleButton;
     private SharedPreferences prefs;
     private WebSocket webSocket;
+    private DatagramSocket udpSocket;
+    private final ExecutorService udpExecutor = Executors.newSingleThreadExecutor();
     private final Object radarDataLock = new Object();
     private String server = "";
+    private String udpHost = "";
+    private int udpPort = 8888;
     private String roomId = "";
     private final ArrayList<String> roomNames = new ArrayList<>();
     private final ArrayList<String> roomServers = new ArrayList<>();
@@ -103,7 +114,7 @@ public class NativeOverlayService extends Service {
     private boolean adjustMode;
     private boolean panelVisible = true;
     private boolean showSkillPanel = true;
-    private int frameDelayMs = 100;
+    private int frameDelayMs = Math.round(1000f / DEFAULT_POLL_FPS);
     private float heroX;
     private float heroY;
     private float minionX;
@@ -138,9 +149,13 @@ public class NativeOverlayService extends Service {
     private final Runnable pollTask = new Runnable() {
         @Override
         public void run() {
-            if (!running || webSocket == null) return;
+            if (!running) return;
             if (roomId != null && roomId.trim().length() > 0) {
-                webSocket.send("web" + System.currentTimeMillis() + "[==]" + roomId.trim());
+                String message = "web" + System.currentTimeMillis() + "[==]" + roomId.trim();
+                sendUdp(message);
+                if (webSocket != null) {
+                    webSocket.send(message);
+                }
             }
             handler.postDelayed(this, frameDelayMs);
         }
@@ -165,12 +180,13 @@ public class NativeOverlayService extends Service {
                 roomServers.addAll(nextRoomServers);
             }
         }
-        int fps = intent != null ? intent.getIntExtra("fps", 90) : 90;
-        frameDelayMs = Math.max(MIN_POLL_DELAY_MS, 1000 / Math.max(1, fps));
+        int fps = intent != null ? intent.getIntExtra("fps", DEFAULT_POLL_FPS) : DEFAULT_POLL_FPS;
+        frameDelayMs = Math.max(MIN_POLL_DELAY_MS, Math.round(1000f / Math.max(1, fps)));
         if (nextServer == null || nextServer.trim().length() == 0) nextServer = "127.0.0.1";
         if (nextRoom == null) nextRoom = "";
         boolean changed = !nextServer.equals(server) || !nextRoom.equals(roomId);
         server = nextServer;
+        updateUdpTarget(server);
         roomId = nextRoom;
         startForegroundCompat();
         showOverlay();
@@ -207,6 +223,11 @@ public class NativeOverlayService extends Service {
                 radarView.setShowSkillPanel(showSkillPanel);
                 applyOverlaySize(Math.max(params == null ? dp(260) : params.height, dp(MIN_OVERLAY_DP)));
             }
+            return true;
+        }
+        if (ACTION_SET_SECURE_MODE.equals(action)) {
+            prefs.edit().putBoolean("secure_mode", false).apply();
+            applyCaptureExclusionToWindows();
             return true;
         }
         if (ACTION_SET_OVERLAY_BOUNDS.equals(action) && radarView == null) {
@@ -284,7 +305,6 @@ public class NativeOverlayService extends Service {
             return true;
         }
         if (ACTION_AUTO_FIT_CAPTURE.equals(action)) {
-            captureScreenAndDetectMap();
             return true;
         }
         return false;
@@ -319,6 +339,7 @@ public class NativeOverlayService extends Service {
         params = new WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, type,
                 overlayWindowFlags(!isRadarAdjustmentUnlocked()),
                 PixelFormat.TRANSLUCENT);
+        applyCaptureExclusion(params);
         applyCutoutMode(params);
         params.gravity = Gravity.TOP | Gravity.START;
         params.x = 0;
@@ -405,6 +426,44 @@ public class NativeOverlayService extends Service {
         }, 3000);
     }
 
+    private void updateUdpTarget(String value) {
+        String host = value == null ? "" : value.trim();
+        host = host.replace("https://", "").replace("http://", "").replace("ws://", "").replace("wss://", "");
+        int slash = host.indexOf('/');
+        if (slash >= 0) host = host.substring(0, slash);
+        int port = 8888;
+        int colon = host.lastIndexOf(':');
+        if (colon >= 0 && colon < host.length() - 1) {
+            try {
+                port = Integer.parseInt(host.substring(colon + 1));
+                host = host.substring(0, colon);
+            } catch (Exception ignored) {
+                host = host.substring(0, colon);
+            }
+        }
+        if (host.length() == 0) host = "127.0.0.1";
+        udpHost = host;
+        udpPort = port;
+    }
+
+    private void sendUdp(String message) {
+        final String host = udpHost;
+        final int port = udpPort;
+        udpExecutor.execute(() -> {
+            try {
+                DatagramSocket socket = udpSocket;
+                if (socket == null || socket.isClosed()) {
+                    socket = new DatagramSocket();
+                    udpSocket = socket;
+                }
+                byte[] data = message.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                DatagramPacket packet = new DatagramPacket(data, data.length, InetAddress.getByName(host), port);
+                socket.send(packet);
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
     private String buildWsUrl(String value) {
         String host = value == null ? "" : value.trim();
         host = host.replace("https://", "").replace("http://", "").replace("ws://", "").replace("wss://", "");
@@ -419,6 +478,10 @@ public class NativeOverlayService extends Service {
         synchronized (radarDataLock) {
             pendingRadarData = null;
             radarFramePosted = false;
+        }
+        if (udpSocket != null) {
+            udpSocket.close();
+            udpSocket = null;
         }
         if (webSocket != null) {
             webSocket.close(1000, "stop");
@@ -438,6 +501,7 @@ public class NativeOverlayService extends Service {
         }
         hideAdjustControls();
         radarView = null;
+        udpExecutor.shutdownNow();
         super.onDestroy();
     }
 
@@ -967,8 +1031,9 @@ public class NativeOverlayService extends Service {
                     ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                     : WindowManager.LayoutParams.TYPE_PHONE;
             toggleParams = new WindowManager.LayoutParams(dp(110), dp(24), type,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                    controlWindowFlags(),
                     PixelFormat.TRANSLUCENT);
+            applyCaptureExclusion(toggleParams);
             toggleParams.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
             toggleParams.y = dp(2);
         }
@@ -983,8 +1048,9 @@ public class NativeOverlayService extends Service {
                     ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                     : WindowManager.LayoutParams.TYPE_PHONE;
             panelParams = new WindowManager.LayoutParams(dp(320), dp(300), type,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                    controlWindowFlags(),
                     PixelFormat.TRANSLUCENT);
+            applyCaptureExclusion(panelParams);
             panelParams.gravity = Gravity.CENTER;
         }
         applyPanelSizeAndPosition();
@@ -1151,7 +1217,6 @@ public class NativeOverlayService extends Service {
             int fps = frameDelayMs <= 0 ? 0 : Math.round(1000f / frameDelayMs);
             panelContent.addView(panelText("帧率: " + fps + " FPS", 12, true), new LinearLayout.LayoutParams(-1, dp(21)));
             renderPanelRoomChooser();
-            addPanelAction(panelContent, "一键适配", this::autoFitResolution);
         } else if (activeMainPage == 1) {
             renderGroupedSettingPage();
         } else if (activeMainPage == 2) {
@@ -1688,6 +1753,32 @@ public class NativeOverlayService extends Service {
         }
         if (notTouchable) flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
         return flags;
+    }
+
+    private int controlWindowFlags() {
+        return WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+    }
+
+    private void applyCaptureExclusion(WindowManager.LayoutParams layoutParams) {
+        // Some ROMs reject hidden WindowManager privateFlags during addView/updateViewLayout,
+        // which can crash the overlay service as soon as a room is connected.
+        // Keep the window params public-only so room connection remains stable.
+    }
+
+    private void applyCaptureExclusionToWindows() {
+        if (windowManager == null) return;
+        updateWindowLayout(radarView, params, overlayWindowFlags(!isRadarAdjustmentUnlocked()));
+        updateWindowLayout(toggleButton, toggleParams, controlWindowFlags());
+        updateWindowLayout(adjustPanel, panelParams, controlWindowFlags());
+    }
+
+    private void updateWindowLayout(View view, WindowManager.LayoutParams layoutParams, int flags) {
+        if (view == null || layoutParams == null) return;
+        layoutParams.flags = flags;
+        applyCaptureExclusion(layoutParams);
+        if (view.getParent() != null) {
+            windowManager.updateViewLayout(view, layoutParams);
+        }
     }
 
     private void applyCutoutMode(WindowManager.LayoutParams layoutParams) {

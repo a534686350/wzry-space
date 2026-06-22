@@ -539,6 +539,7 @@ function Start-Build {
         $script:LogFile = Join-Path $outputDir ("build-" + $namePart + ".log")
         $script:ErrLogFile = Join-Path $outputDir ("build-" + $namePart + ".err.log")
         $script:BuildScriptFile = Join-Path $outputDir ("build-" + $namePart + ".ps1")
+        $script:BuildOptions = $null
         $script:LastLogText = ''
         $script:LastErrLogText = ''
         $openApkButton.Enabled = $false
@@ -584,14 +585,20 @@ function Start-Build {
             $buildScriptLines.Add('    ' + (ConvertTo-PowerShellLiteral $gradleArgs[$i]) + $suffix) | Out-Null
         }
         $buildScriptLines.Add(')') | Out-Null
+        $buildScriptLines.Add('function ConvertTo-CmdArgument {') | Out-Null
+        $buildScriptLines.Add('    param([string]$Value)') | Out-Null
+        $buildScriptLines.Add('    return ''"'' + (($Value -as [string]) -replace ''"'', ''""'') + ''"''') | Out-Null
+        $buildScriptLines.Add('}') | Out-Null
         $buildScriptLines.Add('try {') | Out-Null
-        $buildScriptLines.Add('    & $gradle @gradleArgs 1>> $outLog 2>> $errLog') | Out-Null
+        $buildScriptLines.Add('    $argLine = ($gradleArgs | ForEach-Object { ConvertTo-CmdArgument $_ }) -join '' ''') | Out-Null
+        $buildScriptLines.Add('    $cmdLine = ''""'' + ($gradle -replace ''"'', ''""'') + ''" '' + $argLine + '' 1>> "'' + ($outLog -replace ''"'', ''""'') + ''" 2>> "'' + ($errLog -replace ''"'', ''""'') + ''""''') | Out-Null
+        $buildScriptLines.Add('    & $env:ComSpec /d /c $cmdLine') | Out-Null
         $buildScriptLines.Add('    $code = $LASTEXITCODE') | Out-Null
         $buildScriptLines.Add('    if ($null -eq $code) { $code = 0 }') | Out-Null
         $buildScriptLines.Add('}') | Out-Null
         $buildScriptLines.Add('catch {') | Out-Null
         $buildScriptLines.Add('    $_ | Out-File -LiteralPath $errLog -Append -Encoding utf8') | Out-Null
-        $buildScriptLines.Add('    $code = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 }') | Out-Null
+        $buildScriptLines.Add('    $code = 1') | Out-Null
         $buildScriptLines.Add('}') | Out-Null
         $buildScriptLines.Add('exit $code') | Out-Null
         $utf8Bom = New-Object System.Text.UTF8Encoding($true)
@@ -640,241 +647,362 @@ function Start-Build {
     }
 }
 
+
+# ===================== Color Palette =====================
+$script:BG             = [System.Drawing.Color]::FromArgb(241, 245, 249)
+$script:CARD_BG        = [System.Drawing.Color]::White
+$script:CARD_BORDER    = [System.Drawing.Color]::FromArgb(226, 232, 240)
+$script:HEADER_BG      = [System.Drawing.Color]::FromArgb(15, 23, 42)
+$script:HEADER_BG2     = [System.Drawing.Color]::FromArgb(30, 41, 59)
+$script:ACCENT         = [System.Drawing.Color]::FromArgb(37, 99, 235)
+$script:ACCENT_DARK    = [System.Drawing.Color]::FromArgb(29, 78, 216)
+$script:ACCENT_LIGHT   = [System.Drawing.Color]::FromArgb(224, 242, 254)
+$script:ACCENT_SUBTLE  = [System.Drawing.Color]::FromArgb(239, 246, 255)
+$script:TEXT_PRIMARY    = [System.Drawing.Color]::FromArgb(15, 23, 42)
+$script:TEXT_SECONDARY = [System.Drawing.Color]::FromArgb(71, 85, 105)
+$script:TEXT_HINT      = [System.Drawing.Color]::FromArgb(148, 163, 184)
+$script:BORDER         = [System.Drawing.Color]::FromArgb(226, 232, 240)
+$script:INPUT_BG       = [System.Drawing.Color]::FromArgb(248, 250, 252)
+$script:INPUT_BORDER   = [System.Drawing.Color]::FromArgb(209, 213, 219)
+$script:LOG_BG         = [System.Drawing.Color]::FromArgb(7, 17, 31)
+$script:LOG_FG         = [System.Drawing.Color]::FromArgb(186, 230, 253)
+$script:LOG_HDR        = [System.Drawing.Color]::FromArgb(18, 31, 52)
+$script:SUCCESS        = [System.Drawing.Color]::FromArgb(16, 185, 129)
+$script:SUCCESS_LIGHT  = [System.Drawing.Color]::FromArgb(209, 250, 229)
+$script:DANGER         = [System.Drawing.Color]::FromArgb(239, 68, 68)
+$script:FOOTER_BG      = [System.Drawing.Color]::FromArgb(248, 250, 252)
+$script:FOOTER_BORDER  = [System.Drawing.Color]::FromArgb(226, 232, 240)
+
+# ===================== Form =====================
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'ALinRadar 本地 APK 打包器'
-$form.Size = New-Object System.Drawing.Size(860, 850)
+$form.Size = New-Object System.Drawing.Size(878, 930)
 $form.StartPosition = 'CenterScreen'
-$form.MinimumSize = New-Object System.Drawing.Size(840, 810)
-$form.BackColor = [System.Drawing.Color]::FromArgb(238, 244, 252)
+$form.MinimumSize = New-Object System.Drawing.Size(860, 900)
+$form.BackColor = $script:BG
+$form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+$form.MaximizeBox = $false
+
+# ===================== Header =====================
+$headerPanel = New-Object System.Windows.Forms.Panel
+$headerPanel.Location = New-Object System.Drawing.Point(0, 0)
+$headerPanel.Size = New-Object System.Drawing.Size(878, 84)
+$headerPanel.BackColor = $script:HEADER_BG
+$form.Controls.Add($headerPanel)
+
+$accentLine = New-Object System.Windows.Forms.Panel
+$accentLine.Location = New-Object System.Drawing.Point(0, 81)
+$accentLine.Size = New-Object System.Drawing.Size(878, 3)
+$accentLine.BackColor = $script:ACCENT
+$headerPanel.Controls.Add($accentLine)
 
 $title = New-Object System.Windows.Forms.Label
-$title.Text = 'LD APK 打包工作台'
+$title.Text = 'ALinRadar APK 打包工作台'
 $title.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 18, [System.Drawing.FontStyle]::Bold)
 $title.ForeColor = [System.Drawing.Color]::White
+$title.BackColor = 'Transparent'
 $title.AutoSize = $true
-$title.Location = New-Object System.Drawing.Point(22, 18)
-$form.Controls.Add($title)
+$title.Location = New-Object System.Drawing.Point(28, 13)
+$headerPanel.Controls.Add($title)
 
 $subtitle = New-Object System.Windows.Forms.Label
-$subtitle.Text = '配置服务器、品牌信息与图标，本机一键生成加固混淆 Release APK。'
+$subtitle.Text = '配置服务端、品牌信息与图标，本机一键生成 Release APK'
 $subtitle.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
 $subtitle.ForeColor = [System.Drawing.Color]::FromArgb(203, 213, 225)
+$subtitle.BackColor = 'Transparent'
 $subtitle.AutoSize = $true
-$subtitle.Location = New-Object System.Drawing.Point(24, 50)
-$form.Controls.Add($subtitle)
+$subtitle.Location = New-Object System.Drawing.Point(28, 48)
+$headerPanel.Controls.Add($subtitle)
 
+$headerBadge = New-Object System.Windows.Forms.Label
+$headerBadge.Text = '本地打包  /  Release'
+$headerBadge.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10, [System.Drawing.FontStyle]::Bold)
+$headerBadge.ForeColor = [System.Drawing.Color]::White
+$headerBadge.BackColor = $script:ACCENT_DARK
+$headerBadge.TextAlign = 'MiddleCenter'
+$headerBadge.Location = New-Object System.Drawing.Point(662, 14)
+$headerBadge.Size = New-Object System.Drawing.Size(170, 30)
+$headerPanel.Controls.Add($headerBadge)
+
+$headerMeta = New-Object System.Windows.Forms.Label
+$headerMeta.Text = 'Gradle 8.10.2 · JDK 17'
+$headerMeta.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 8)
+$headerMeta.ForeColor = [System.Drawing.Color]::FromArgb(186, 230, 253)
+$headerMeta.BackColor = 'Transparent'
+$headerMeta.TextAlign = 'MiddleRight'
+$headerMeta.Location = New-Object System.Drawing.Point(622, 49)
+$headerMeta.Size = New-Object System.Drawing.Size(210, 20)
+$headerPanel.Controls.Add($headerMeta)
+
+# ===================== Card builder (pure panels, no Paint) =====================
+function New-Card {
+    param(
+        [int]$X, [int]$Y, [int]$W,
+        [int]$HeaderH, [int]$BodyH,
+        [string]$TitleText,
+        [System.Drawing.Color]$HeaderColor
+    )
+    $bodyH_inner = $BodyH - 4
+    $container = New-Object System.Windows.Forms.Panel
+    $container.Location = New-Object System.Drawing.Point($X, $Y)
+    $container.Size = New-Object System.Drawing.Size($W, ($HeaderH + $BodyH))
+    $container.BackColor = $script:CARD_BG
+    $container.BorderStyle = 'FixedSingle'
+
+    $hdr = New-Object System.Windows.Forms.Panel
+    $hdr.Location = New-Object System.Drawing.Point(0, 0)
+    $hdr.Size = New-Object System.Drawing.Size($W, $HeaderH)
+    $hdr.BackColor = $HeaderColor
+    $container.Controls.Add($hdr)
+
+    $hdrLbl = New-Object System.Windows.Forms.Label
+    $hdrLbl.Text = "   $TitleText"
+    $hdrLbl.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10, [System.Drawing.FontStyle]::Bold)
+    $hdrLbl.ForeColor = [System.Drawing.Color]::White
+    $hdrLbl.BackColor = 'Transparent'
+    $hdrLbl.Dock = 'Fill'
+    $hdr.Controls.Add($hdrLbl)
+
+    $body = New-Object System.Windows.Forms.Panel
+    $body.Location = New-Object System.Drawing.Point(0, $HeaderH)
+    $body.Size = New-Object System.Drawing.Size($W, $bodyH_inner)
+    $body.BackColor = $script:CARD_BG
+    $container.Controls.Add($body)
+
+    $form.Controls.Add($container)
+
+    return @{ Container = $container; Header = $hdr; Body = $body }
+}
+
+# ===================== Card 1: 服务器设置 =====================
+$card1 = New-Card -X 16 -Y 96 -W 828 -HeaderH 38 -BodyH 148 -TitleText '服务器设置' -HeaderColor $script:ACCENT
+$c1 = $card1.Body
+
+# Row 1: 协议 / 服务器 / 网页端口 / WS端口
 $schemeLabel = New-Object System.Windows.Forms.Label
 $schemeLabel.Text = '协议'
-$schemeLabel.Location = New-Object System.Drawing.Point(24, 88)
-$schemeLabel.Size = New-Object System.Drawing.Size(80, 24)
-$form.Controls.Add($schemeLabel)
+$schemeLabel.Location = New-Object System.Drawing.Point(16, 12)
+$schemeLabel.Size = New-Object System.Drawing.Size(36, 22)
+$c1.Controls.Add($schemeLabel)
 
 $schemeInput = New-Object System.Windows.Forms.ComboBox
 $schemeInput.DropDownStyle = 'DropDownList'
 $schemeInput.Items.Add('http') | Out-Null
 $schemeInput.Items.Add('https') | Out-Null
 $schemeInput.SelectedIndex = 0
-$schemeInput.Location = New-Object System.Drawing.Point(112, 85)
-$schemeInput.Size = New-Object System.Drawing.Size(88, 26)
+$schemeInput.Location = New-Object System.Drawing.Point(56, 9)
+$schemeInput.Size = New-Object System.Drawing.Size(76, 26)
 $schemeInput.Add_SelectedIndexChanged({ Update-Preview })
-$form.Controls.Add($schemeInput)
+$c1.Controls.Add($schemeInput)
 
 $hostLabel = New-Object System.Windows.Forms.Label
-$hostLabel.Text = '服务器IP/域名'
-$hostLabel.Location = New-Object System.Drawing.Point(214, 88)
-$hostLabel.Size = New-Object System.Drawing.Size(120, 24)
-$form.Controls.Add($hostLabel)
+$hostLabel.Text = '服务器'
+$hostLabel.Location = New-Object System.Drawing.Point(148, 12)
+$hostLabel.Size = New-Object System.Drawing.Size(50, 22)
+$c1.Controls.Add($hostLabel)
 
 $hostInput = New-Object System.Windows.Forms.TextBox
-$hostInput.Location = New-Object System.Drawing.Point(340, 85)
-$hostInput.Size = New-Object System.Drawing.Size(210, 26)
+$hostInput.Location = New-Object System.Drawing.Point(202, 9)
+$hostInput.Size = New-Object System.Drawing.Size(200, 26)
 $hostInput.Text = '101.200.36.103'
 $hostInput.Add_TextChanged({ Update-Preview })
-$form.Controls.Add($hostInput)
+$c1.Controls.Add($hostInput)
 
 $portLabel = New-Object System.Windows.Forms.Label
 $portLabel.Text = '网页端口'
-$portLabel.Location = New-Object System.Drawing.Point(565, 88)
-$portLabel.Size = New-Object System.Drawing.Size(64, 24)
-$form.Controls.Add($portLabel)
+$portLabel.Location = New-Object System.Drawing.Point(418, 12)
+$portLabel.Size = New-Object System.Drawing.Size(58, 22)
+$c1.Controls.Add($portLabel)
 
 $portInput = New-Object System.Windows.Forms.TextBox
-$portInput.Location = New-Object System.Drawing.Point(628, 85)
-$portInput.Size = New-Object System.Drawing.Size(55, 26)
+$portInput.Location = New-Object System.Drawing.Point(480, 9)
+$portInput.Size = New-Object System.Drawing.Size(56, 26)
 $portInput.Text = '80'
 $portInput.Add_TextChanged({ Update-Preview })
-$form.Controls.Add($portInput)
+$c1.Controls.Add($portInput)
 
 $wsPortLabel = New-Object System.Windows.Forms.Label
 $wsPortLabel.Text = 'WS端口'
-$wsPortLabel.Location = New-Object System.Drawing.Point(690, 88)
-$wsPortLabel.Size = New-Object System.Drawing.Size(54, 24)
-$form.Controls.Add($wsPortLabel)
+$wsPortLabel.Location = New-Object System.Drawing.Point(552, 12)
+$wsPortLabel.Size = New-Object System.Drawing.Size(50, 22)
+$c1.Controls.Add($wsPortLabel)
 
 $wsPortInput = New-Object System.Windows.Forms.TextBox
-$wsPortInput.Location = New-Object System.Drawing.Point(742, 85)
-$wsPortInput.Size = New-Object System.Drawing.Size(48, 26)
+$wsPortInput.Location = New-Object System.Drawing.Point(606, 9)
+$wsPortInput.Size = New-Object System.Drawing.Size(56, 26)
 $wsPortInput.Text = '8888'
 $wsPortInput.Add_TextChanged({ Update-Preview })
-$form.Controls.Add($wsPortInput)
+$c1.Controls.Add($wsPortInput)
 
+# Preview row
 $previewLabel = New-Object System.Windows.Forms.Label
-$previewLabel.Location = New-Object System.Drawing.Point(24, 122)
-$previewLabel.Size = New-Object System.Drawing.Size(790, 24)
+$previewLabel.Location = New-Object System.Drawing.Point(16, 44)
+$previewLabel.Size = New-Object System.Drawing.Size(796, 22)
 $previewLabel.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9, [System.Drawing.FontStyle]::Bold)
-$previewLabel.ForeColor = [System.Drawing.Color]::FromArgb(4, 120, 87)
-$form.Controls.Add($previewLabel)
+$previewLabel.ForeColor = $script:SUCCESS
+$c1.Controls.Add($previewLabel)
 
+# Row 2: 是否带后台 / hint / APP可改IP
 $loginModeLabel = New-Object System.Windows.Forms.Label
 $loginModeLabel.Text = '是否带后台'
-$loginModeLabel.Location = New-Object System.Drawing.Point(24, 158)
-$loginModeLabel.Size = New-Object System.Drawing.Size(100, 24)
-$form.Controls.Add($loginModeLabel)
+$loginModeLabel.Location = New-Object System.Drawing.Point(16, 78)
+$loginModeLabel.Size = New-Object System.Drawing.Size(80, 22)
+$c1.Controls.Add($loginModeLabel)
 
 $loginModeInput = New-Object System.Windows.Forms.ComboBox
 $loginModeInput.DropDownStyle = 'DropDownList'
 $loginModeInput.Items.Add('带后台（登录/API）') | Out-Null
 $loginModeInput.Items.Add('不带后台（免登录）') | Out-Null
 $loginModeInput.SelectedIndex = 0
-$loginModeInput.Location = New-Object System.Drawing.Point(130, 155)
-$loginModeInput.Size = New-Object System.Drawing.Size(220, 26)
+$loginModeInput.Location = New-Object System.Drawing.Point(100, 75)
+$loginModeInput.Size = New-Object System.Drawing.Size(198, 26)
 $loginModeInput.Add_SelectedIndexChanged({ Update-Preview })
-$form.Controls.Add($loginModeInput)
-
-$allowCustomServerIpInput = New-Object System.Windows.Forms.CheckBox
-$allowCustomServerIpInput.Text = 'APP可改IP'
-$allowCustomServerIpInput.Location = New-Object System.Drawing.Point(724, 156)
-$allowCustomServerIpInput.Size = New-Object System.Drawing.Size(110, 24)
-$allowCustomServerIpInput.Checked = $false
-$allowCustomServerIpInput.Add_CheckedChanged({ Update-Preview })
-$form.Controls.Add($allowCustomServerIpInput)
+$c1.Controls.Add($loginModeInput)
 
 $loginModeHint = New-Object System.Windows.Forms.Label
 $loginModeHint.Text = '不带后台时管理/API 固定走 101.200.36.103；房间数据仍走输入IP的8888。'
-$loginModeHint.Location = New-Object System.Drawing.Point(366, 158)
-$loginModeHint.Size = New-Object System.Drawing.Size(350, 24)
-$loginModeHint.ForeColor = [System.Drawing.Color]::FromArgb(82, 94, 112)
-$form.Controls.Add($loginModeHint)
+$loginModeHint.Location = New-Object System.Drawing.Point(314, 78)
+$loginModeHint.Size = New-Object System.Drawing.Size(380, 22)
+$loginModeHint.ForeColor = $script:TEXT_HINT
+$c1.Controls.Add($loginModeHint)
 
+$allowCustomServerIpInput = New-Object System.Windows.Forms.CheckBox
+$allowCustomServerIpInput.Text = 'APP可改IP'
+$allowCustomServerIpInput.Location = New-Object System.Drawing.Point(710, 76)
+$allowCustomServerIpInput.Size = New-Object System.Drawing.Size(100, 24)
+$allowCustomServerIpInput.Checked = $false
+$allowCustomServerIpInput.Add_CheckedChanged({ Update-Preview })
+$c1.Controls.Add($allowCustomServerIpInput)
+
+# Row 3: 购买链接
 $buyUrlLabel = New-Object System.Windows.Forms.Label
 $buyUrlLabel.Text = '购买链接'
-$buyUrlLabel.Location = New-Object System.Drawing.Point(24, 194)
-$buyUrlLabel.Size = New-Object System.Drawing.Size(100, 24)
-$form.Controls.Add($buyUrlLabel)
+$buyUrlLabel.Location = New-Object System.Drawing.Point(16, 114)
+$buyUrlLabel.Size = New-Object System.Drawing.Size(80, 22)
+$c1.Controls.Add($buyUrlLabel)
 
 $buyUrlInput = New-Object System.Windows.Forms.TextBox
-$buyUrlInput.Location = New-Object System.Drawing.Point(130, 191)
-$buyUrlInput.Size = New-Object System.Drawing.Size(626, 26)
+$buyUrlInput.Location = New-Object System.Drawing.Point(100, 111)
+$buyUrlInput.Size = New-Object System.Drawing.Size(712, 26)
 $buyUrlInput.Text = $DefaultBuyUrl
-$form.Controls.Add($buyUrlInput)
+$c1.Controls.Add($buyUrlInput)
+
+# ===================== Card 2: 应用品牌 =====================
+$card2 = New-Card -X 16 -Y 292 -W 828 -HeaderH 38 -BodyH 280 -TitleText '应用品牌' -HeaderColor $script:ACCENT_DARK
+$c2 = $card2.Body
 
 $buyUrlHint = New-Object System.Windows.Forms.Label
 $buyUrlHint.Text = '可选。后台没有配置购买卡密链接时，APP 使用这里打包进去的兜底链接。'
-$buyUrlHint.Location = New-Object System.Drawing.Point(130, 222)
-$buyUrlHint.Size = New-Object System.Drawing.Size(626, 22)
-$buyUrlHint.ForeColor = [System.Drawing.Color]::FromArgb(82, 94, 112)
-$form.Controls.Add($buyUrlHint)
+$buyUrlHint.Location = New-Object System.Drawing.Point(100, 6)
+$buyUrlHint.Size = New-Object System.Drawing.Size(600, 18)
+$buyUrlHint.ForeColor = $script:TEXT_HINT
+$c2.Controls.Add($buyUrlHint)
 
+# Row: APP名称 / 版本名 / 版本号
 $appNameLabel = New-Object System.Windows.Forms.Label
 $appNameLabel.Text = 'APP名称'
-$appNameLabel.Location = New-Object System.Drawing.Point(24, 262)
-$appNameLabel.Size = New-Object System.Drawing.Size(100, 24)
-$form.Controls.Add($appNameLabel)
+$appNameLabel.Location = New-Object System.Drawing.Point(16, 36)
+$appNameLabel.Size = New-Object System.Drawing.Size(80, 22)
+$c2.Controls.Add($appNameLabel)
 
 $appNameInput = New-Object System.Windows.Forms.TextBox
-$appNameInput.Location = New-Object System.Drawing.Point(130, 259)
-$appNameInput.Size = New-Object System.Drawing.Size(285, 26)
+$appNameInput.Location = New-Object System.Drawing.Point(100, 33)
+$appNameInput.Size = New-Object System.Drawing.Size(276, 26)
 $appNameInput.Text = $DefaultAppName
-$form.Controls.Add($appNameInput)
-
-$homeTitleLabel = New-Object System.Windows.Forms.Label
-$homeTitleLabel.Text = '主页标题'
-$homeTitleLabel.Location = New-Object System.Drawing.Point(24, 298)
-$homeTitleLabel.Size = New-Object System.Drawing.Size(100, 24)
-$form.Controls.Add($homeTitleLabel)
-
-$homeTitleInput = New-Object System.Windows.Forms.TextBox
-$homeTitleInput.Location = New-Object System.Drawing.Point(130, 295)
-$homeTitleInput.Size = New-Object System.Drawing.Size(285, 26)
-$homeTitleInput.Text = $DefaultHomeTitle
-$form.Controls.Add($homeTitleInput)
-
-$panelTitleLabel = New-Object System.Windows.Forms.Label
-$panelTitleLabel.Text = '面板标题'
-$panelTitleLabel.Location = New-Object System.Drawing.Point(428, 298)
-$panelTitleLabel.Size = New-Object System.Drawing.Size(70, 24)
-$form.Controls.Add($panelTitleLabel)
-
-$panelTitleInput = New-Object System.Windows.Forms.TextBox
-$panelTitleInput.Location = New-Object System.Drawing.Point(502, 295)
-$panelTitleInput.Size = New-Object System.Drawing.Size(254, 26)
-$panelTitleInput.Text = $DefaultPanelTitle
-$form.Controls.Add($panelTitleInput)
-
-$panelChannelLabel = New-Object System.Windows.Forms.Label
-$panelChannelLabel.Text = '频道文字'
-$panelChannelLabel.Location = New-Object System.Drawing.Point(24, 334)
-$panelChannelLabel.Size = New-Object System.Drawing.Size(100, 24)
-$form.Controls.Add($panelChannelLabel)
-
-$panelChannelInput = New-Object System.Windows.Forms.TextBox
-$panelChannelInput.Location = New-Object System.Drawing.Point(130, 331)
-$panelChannelInput.Size = New-Object System.Drawing.Size(626, 26)
-$panelChannelInput.Text = $DefaultPanelChannel
-$form.Controls.Add($panelChannelInput)
-
-$panelStatusLabel = New-Object System.Windows.Forms.Label
-$panelStatusLabel.Text = '状态文字'
-$panelStatusLabel.Location = New-Object System.Drawing.Point(24, 370)
-$panelStatusLabel.Size = New-Object System.Drawing.Size(100, 24)
-$form.Controls.Add($panelStatusLabel)
-
-$panelStatusInput = New-Object System.Windows.Forms.TextBox
-$panelStatusInput.Location = New-Object System.Drawing.Point(130, 367)
-$panelStatusInput.Size = New-Object System.Drawing.Size(626, 26)
-$panelStatusInput.Text = $DefaultPanelStatus
-$form.Controls.Add($panelStatusInput)
+$c2.Controls.Add($appNameInput)
 
 $versionNameLabel = New-Object System.Windows.Forms.Label
 $versionNameLabel.Text = '版本名'
-$versionNameLabel.Location = New-Object System.Drawing.Point(428, 262)
-$versionNameLabel.Size = New-Object System.Drawing.Size(54, 24)
-$form.Controls.Add($versionNameLabel)
+$versionNameLabel.Location = New-Object System.Drawing.Point(420, 36)
+$versionNameLabel.Size = New-Object System.Drawing.Size(48, 22)
+$c2.Controls.Add($versionNameLabel)
 
 $versionNameInput = New-Object System.Windows.Forms.TextBox
-$versionNameInput.Location = New-Object System.Drawing.Point(482, 259)
-$versionNameInput.Size = New-Object System.Drawing.Size(92, 26)
+$versionNameInput.Location = New-Object System.Drawing.Point(472, 33)
+$versionNameInput.Size = New-Object System.Drawing.Size(96, 26)
 $versionNameInput.Text = $DefaultVersionName
-$form.Controls.Add($versionNameInput)
+$c2.Controls.Add($versionNameInput)
 
 $versionCodeLabel = New-Object System.Windows.Forms.Label
 $versionCodeLabel.Text = '版本号'
-$versionCodeLabel.Location = New-Object System.Drawing.Point(588, 262)
-$versionCodeLabel.Size = New-Object System.Drawing.Size(54, 24)
-$form.Controls.Add($versionCodeLabel)
+$versionCodeLabel.Location = New-Object System.Drawing.Point(588, 36)
+$versionCodeLabel.Size = New-Object System.Drawing.Size(48, 22)
+$c2.Controls.Add($versionCodeLabel)
 
 $versionCodeInput = New-Object System.Windows.Forms.TextBox
-$versionCodeInput.Location = New-Object System.Drawing.Point(642, 259)
-$versionCodeInput.Size = New-Object System.Drawing.Size(114, 26)
+$versionCodeInput.Location = New-Object System.Drawing.Point(640, 33)
+$versionCodeInput.Size = New-Object System.Drawing.Size(172, 26)
 $versionCodeInput.Text = $DefaultVersionCode
-$form.Controls.Add($versionCodeInput)
+$c2.Controls.Add($versionCodeInput)
 
+# Row: 主页标题 / 面板标题
+$homeTitleLabel = New-Object System.Windows.Forms.Label
+$homeTitleLabel.Text = '主页标题'
+$homeTitleLabel.Location = New-Object System.Drawing.Point(16, 72)
+$homeTitleLabel.Size = New-Object System.Drawing.Size(80, 22)
+$c2.Controls.Add($homeTitleLabel)
+
+$homeTitleInput = New-Object System.Windows.Forms.TextBox
+$homeTitleInput.Location = New-Object System.Drawing.Point(100, 69)
+$homeTitleInput.Size = New-Object System.Drawing.Size(276, 26)
+$homeTitleInput.Text = $DefaultHomeTitle
+$c2.Controls.Add($homeTitleInput)
+
+$panelTitleLabel = New-Object System.Windows.Forms.Label
+$panelTitleLabel.Text = '面板标题'
+$panelTitleLabel.Location = New-Object System.Drawing.Point(420, 72)
+$panelTitleLabel.Size = New-Object System.Drawing.Size(48, 22)
+$c2.Controls.Add($panelTitleLabel)
+
+$panelTitleInput = New-Object System.Windows.Forms.TextBox
+$panelTitleInput.Location = New-Object System.Drawing.Point(472, 69)
+$panelTitleInput.Size = New-Object System.Drawing.Size(340, 26)
+$panelTitleInput.Text = $DefaultPanelTitle
+$c2.Controls.Add($panelTitleInput)
+
+# Row: 频道文字
+$panelChannelLabel = New-Object System.Windows.Forms.Label
+$panelChannelLabel.Text = '频道文字'
+$panelChannelLabel.Location = New-Object System.Drawing.Point(16, 108)
+$panelChannelLabel.Size = New-Object System.Drawing.Size(80, 22)
+$c2.Controls.Add($panelChannelLabel)
+
+$panelChannelInput = New-Object System.Windows.Forms.TextBox
+$panelChannelInput.Location = New-Object System.Drawing.Point(100, 105)
+$panelChannelInput.Size = New-Object System.Drawing.Size(712, 26)
+$panelChannelInput.Text = $DefaultPanelChannel
+$c2.Controls.Add($panelChannelInput)
+
+# Row: 状态文字
+$panelStatusLabel = New-Object System.Windows.Forms.Label
+$panelStatusLabel.Text = '状态文字'
+$panelStatusLabel.Location = New-Object System.Drawing.Point(16, 144)
+$panelStatusLabel.Size = New-Object System.Drawing.Size(80, 22)
+$c2.Controls.Add($panelStatusLabel)
+
+$panelStatusInput = New-Object System.Windows.Forms.TextBox
+$panelStatusInput.Location = New-Object System.Drawing.Point(100, 141)
+$panelStatusInput.Size = New-Object System.Drawing.Size(712, 26)
+$panelStatusInput.Text = $DefaultPanelStatus
+$c2.Controls.Add($panelStatusInput)
+
+# Row: APP图标 + 选择图片
 $iconLabel = New-Object System.Windows.Forms.Label
 $iconLabel.Text = 'APP图标'
-$iconLabel.Location = New-Object System.Drawing.Point(24, 406)
-$iconLabel.Size = New-Object System.Drawing.Size(100, 24)
-$form.Controls.Add($iconLabel)
+$iconLabel.Location = New-Object System.Drawing.Point(16, 180)
+$iconLabel.Size = New-Object System.Drawing.Size(80, 22)
+$c2.Controls.Add($iconLabel)
 
 $iconInput = New-Object System.Windows.Forms.TextBox
-$iconInput.Location = New-Object System.Drawing.Point(130, 403)
-$iconInput.Size = New-Object System.Drawing.Size(515, 26)
+$iconInput.Location = New-Object System.Drawing.Point(100, 177)
+$iconInput.Size = New-Object System.Drawing.Size(608, 26)
 $iconInput.Text = $DefaultIconPath
-$form.Controls.Add($iconInput)
+$c2.Controls.Add($iconInput)
 
 $browseIconButton = New-Object System.Windows.Forms.Button
 $browseIconButton.Text = '选择图片'
-$browseIconButton.Location = New-Object System.Drawing.Point(658, 401)
-$browseIconButton.Size = New-Object System.Drawing.Size(98, 30)
+$browseIconButton.Location = New-Object System.Drawing.Point(722, 175)
+$browseIconButton.Size = New-Object System.Drawing.Size(90, 30)
 $browseIconButton.Add_Click({
     $dialog = New-Object System.Windows.Forms.OpenFileDialog
     $dialog.Filter = '图片文件|*.png;*.jpg;*.jpeg;*.bmp|所有文件|*.*'
@@ -887,24 +1015,25 @@ $browseIconButton.Add_Click({
         $iconInput.Text = $dialog.FileName
     }
 })
-$form.Controls.Add($browseIconButton)
+$c2.Controls.Add($browseIconButton)
 
+# Row: 输出文件夹 + 选择目录
 $outputLabel = New-Object System.Windows.Forms.Label
 $outputLabel.Text = '输出文件夹'
-$outputLabel.Location = New-Object System.Drawing.Point(24, 442)
-$outputLabel.Size = New-Object System.Drawing.Size(100, 24)
-$form.Controls.Add($outputLabel)
+$outputLabel.Location = New-Object System.Drawing.Point(16, 216)
+$outputLabel.Size = New-Object System.Drawing.Size(80, 22)
+$c2.Controls.Add($outputLabel)
 
 $outputInput = New-Object System.Windows.Forms.TextBox
-$outputInput.Location = New-Object System.Drawing.Point(130, 439)
-$outputInput.Size = New-Object System.Drawing.Size(515, 26)
+$outputInput.Location = New-Object System.Drawing.Point(100, 213)
+$outputInput.Size = New-Object System.Drawing.Size(608, 26)
 $outputInput.Text = $DefaultOutputDir
-$form.Controls.Add($outputInput)
+$c2.Controls.Add($outputInput)
 
 $browseButton = New-Object System.Windows.Forms.Button
 $browseButton.Text = '选择目录'
-$browseButton.Location = New-Object System.Drawing.Point(658, 437)
-$browseButton.Size = New-Object System.Drawing.Size(98, 30)
+$browseButton.Location = New-Object System.Drawing.Point(722, 211)
+$browseButton.Size = New-Object System.Drawing.Size(90, 30)
 $browseButton.Add_Click({
     $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
     $dialog.SelectedPath = $outputInput.Text
@@ -912,132 +1041,137 @@ $browseButton.Add_Click({
         $outputInput.Text = $dialog.SelectedPath
     }
 })
-$form.Controls.Add($browseButton)
+$c2.Controls.Add($browseButton)
+
+# ===================== Action buttons row =====================
+$actionBg = New-Object System.Windows.Forms.Panel
+$actionBg.Location = New-Object System.Drawing.Point(16, 622)
+$actionBg.Size = New-Object System.Drawing.Size(828, 56)
+$actionBg.BackColor = [System.Drawing.Color]::FromArgb(248, 250, 252)
+$actionBg.BorderStyle = 'FixedSingle'
+$form.Controls.Add($actionBg)
 
 $testButton = New-Object System.Windows.Forms.Button
 $testButton.Text = '测试网页/API'
-$testButton.Location = New-Object System.Drawing.Point(130, 482)
-$testButton.Size = New-Object System.Drawing.Size(140, 36)
+$testButton.Location = New-Object System.Drawing.Point(100, 8)
+$testButton.Size = New-Object System.Drawing.Size(146, 38)
 $testButton.Add_Click({ Invoke-BackendTest })
-$form.Controls.Add($testButton)
+$actionBg.Controls.Add($testButton)
 
 $buildButton = New-Object System.Windows.Forms.Button
 $buildButton.Text = '一键打包 APK'
-$buildButton.Location = New-Object System.Drawing.Point(284, 482)
-$buildButton.Size = New-Object System.Drawing.Size(140, 36)
-$buildButton.BackColor = [System.Drawing.Color]::FromArgb(36, 105, 245)
+$buildButton.Location = New-Object System.Drawing.Point(260, 8)
+$buildButton.Size = New-Object System.Drawing.Size(166, 38)
+$buildButton.BackColor = $script:ACCENT
 $buildButton.ForeColor = [System.Drawing.Color]::White
 $buildButton.FlatStyle = 'Flat'
 $buildButton.FlatAppearance.BorderSize = 0
+$buildButton.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10, [System.Drawing.FontStyle]::Bold)
 $buildButton.Add_Click({ Start-Build })
-$form.Controls.Add($buildButton)
+$actionBg.Controls.Add($buildButton)
 
 $openButton = New-Object System.Windows.Forms.Button
 $openButton.Text = '打开目录'
-$openButton.Location = New-Object System.Drawing.Point(438, 482)
-$openButton.Size = New-Object System.Drawing.Size(120, 36)
+$openButton.Location = New-Object System.Drawing.Point(440, 8)
+$openButton.Size = New-Object System.Drawing.Size(120, 38)
 $openButton.Add_Click({
     $dir = $outputInput.Text.Trim()
     if ([string]::IsNullOrWhiteSpace($dir)) { $dir = $DefaultOutputDir }
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     Start-Process explorer.exe $dir
 })
-$form.Controls.Add($openButton)
+$actionBg.Controls.Add($openButton)
 
 $openApkButton = New-Object System.Windows.Forms.Button
 $openApkButton.Text = '定位 APK'
-$openApkButton.Location = New-Object System.Drawing.Point(572, 482)
-$openApkButton.Size = New-Object System.Drawing.Size(120, 36)
+$openApkButton.Location = New-Object System.Drawing.Point(574, 8)
+$openApkButton.Size = New-Object System.Drawing.Size(120, 38)
 $openApkButton.Enabled = $false
 $openApkButton.Add_Click({
     if ($script:OutputApk -and (Test-Path -LiteralPath $script:OutputApk)) {
         Start-Process explorer.exe "/select,`"$script:OutputApk`""
     }
 })
-$form.Controls.Add($openApkButton)
+$actionBg.Controls.Add($openApkButton)
 
-foreach ($button in @($testButton, $openButton, $openApkButton, $browseIconButton, $browseButton)) {
-    $button.FlatStyle = 'Flat'
-    $button.BackColor = [System.Drawing.Color]::FromArgb(255, 255, 255)
-    $button.ForeColor = [System.Drawing.Color]::FromArgb(30, 64, 175)
-    $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(147, 197, 253)
-    $button.FlatAppearance.BorderSize = 1
+# Secondary button styling + hover
+foreach ($btn in @($testButton, $openButton, $openApkButton, $browseIconButton, $browseButton)) {
+    $btn.FlatStyle = 'Flat'
+    $btn.BackColor = [System.Drawing.Color]::FromArgb(255, 255, 255)
+    $btn.ForeColor = $script:ACCENT_DARK
+    $btn.FlatAppearance.BorderColor = $script:ACCENT
+    $btn.FlatAppearance.BorderSize = 1
+    $btn.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9, [System.Drawing.FontStyle]::Bold)
+    $btn.Add_MouseEnter({ $this.BackColor = $script:ACCENT_LIGHT })
+    $btn.Add_MouseLeave({ $this.BackColor = [System.Drawing.Color]::FromArgb(255, 255, 255) })
 }
 
+# Build button hover
+$buildButton.Add_MouseEnter({ $this.BackColor = $script:ACCENT_DARK })
+$buildButton.Add_MouseLeave({ $this.BackColor = $script:ACCENT })
+
+# ===================== Status label & progress bar =====================
 $statusLabel = New-Object System.Windows.Forms.Label
 $statusLabel.Text = '就绪。'
-$statusLabel.Location = New-Object System.Drawing.Point(24, 534)
-$statusLabel.Size = New-Object System.Drawing.Size(735, 24)
+$statusLabel.Location = New-Object System.Drawing.Point(24, 686)
+$statusLabel.Size = New-Object System.Drawing.Size(810, 22)
+$statusLabel.ForeColor = $script:ACCENT_DARK
+$statusLabel.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9, [System.Drawing.FontStyle]::Bold)
 $form.Controls.Add($statusLabel)
 
 $progress = New-Object System.Windows.Forms.ProgressBar
-$progress.Location = New-Object System.Drawing.Point(24, 562)
-$progress.Size = New-Object System.Drawing.Size(732, 18)
+$progress.Location = New-Object System.Drawing.Point(16, 710)
+$progress.Size = New-Object System.Drawing.Size(828, 6)
 $progress.Value = 0
+$progress.Style = 'Blocks'
 $form.Controls.Add($progress)
 
+# ===================== Card 4: 构建日志 =====================
+$card3 = New-Card -X 16 -Y 724 -W 828 -HeaderH 34 -BodyH 146 -TitleText '构建日志' -HeaderColor $script:LOG_HDR
+$c3 = $card3.Body
+$c3.BackColor = $script:LOG_BG
+
 $logBox = New-Object System.Windows.Forms.TextBox
-$logBox.Location = New-Object System.Drawing.Point(24, 598)
-$logBox.Size = New-Object System.Drawing.Size(732, 190)
+$logBox.Location = New-Object System.Drawing.Point(8, 6)
+$logBox.Size = New-Object System.Drawing.Size(812, 132)
 $logBox.Multiline = $true
 $logBox.ScrollBars = 'Vertical'
 $logBox.ReadOnly = $true
 $logBox.Font = New-Object System.Drawing.Font('Consolas', 9)
-$logBox.BackColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
-$logBox.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
-$form.Controls.Add($logBox)
+$logBox.BackColor = $script:LOG_BG
+$logBox.ForeColor = $script:LOG_FG
+$logBox.BorderStyle = 'None'
+$c3.Controls.Add($logBox)
 
-$headerPanel = New-Object System.Windows.Forms.Panel
-$headerPanel.Location = New-Object System.Drawing.Point(0, 0)
-$headerPanel.Size = New-Object System.Drawing.Size(860, 76)
-$headerPanel.BackColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
-$form.Controls.Add($headerPanel)
-$headerPanel.SendToBack()
-
-function Add-SectionCard {
-    param(
-        [int]$X,
-        [int]$Y,
-        [int]$W,
-        [int]$H,
-        [string]$Title
-    )
-    $card = New-Object System.Windows.Forms.Panel
-    $card.Location = New-Object System.Drawing.Point($X, $Y)
-    $card.Size = New-Object System.Drawing.Size($W, $H)
-    $card.BackColor = [System.Drawing.Color]::White
-    $card.BorderStyle = 'FixedSingle'
-    $form.Controls.Add($card)
-    $card.SendToBack()
-
-}
-
-Add-SectionCard 18 82 800 112 '服务器配置'
-Add-SectionCard 18 186 800 286 '应用品牌'
-Add-SectionCard 18 478 800 108 '输出与打包'
-Add-SectionCard 18 594 800 226 '构建日志'
-
-foreach ($control in $form.Controls) {
-    if ($control -is [System.Windows.Forms.TextBox] -and $control -ne $logBox) {
+# ===================== Global input styling =====================
+foreach ($control in $c1.Controls) {
+    if ($control -is [System.Windows.Forms.TextBox]) {
         $control.BorderStyle = 'FixedSingle'
-        $control.BackColor = [System.Drawing.Color]::FromArgb(248, 250, 252)
-        $control.ForeColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
+        $control.BackColor = $script:INPUT_BG
+        $control.ForeColor = $script:TEXT_PRIMARY
     } elseif ($control -is [System.Windows.Forms.ComboBox]) {
-        $control.BackColor = [System.Drawing.Color]::FromArgb(248, 250, 252)
-        $control.ForeColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
-    } elseif ($control -is [System.Windows.Forms.Label] -and $control -ne $title -and $control -ne $subtitle -and $control -ne $previewLabel) {
-        $control.ForeColor = [System.Drawing.Color]::FromArgb(51, 65, 85)
+        $control.BackColor = $script:INPUT_BG
+        $control.ForeColor = $script:TEXT_PRIMARY
+    } elseif ($control -is [System.Windows.Forms.Label]) {
+        $control.ForeColor = $script:TEXT_SECONDARY
     }
 }
-
-$title.BringToFront()
-$subtitle.BringToFront()
+foreach ($control in $c2.Controls) {
+    if ($control -is [System.Windows.Forms.TextBox]) {
+        $control.BorderStyle = 'FixedSingle'
+        $control.BackColor = $script:INPUT_BG
+        $control.ForeColor = $script:TEXT_PRIMARY
+    } elseif ($control -is [System.Windows.Forms.ComboBox]) {
+        $control.BackColor = $script:INPUT_BG
+        $control.ForeColor = $script:TEXT_PRIMARY
+    } elseif ($control -is [System.Windows.Forms.Label]) {
+        $control.ForeColor = $script:TEXT_SECONDARY
+    }
+}
 $previewLabel.BringToFront()
-$buildButton.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
-$buildButton.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9, [System.Drawing.FontStyle]::Bold)
-$statusLabel.ForeColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
-$progress.ForeColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
+$progress.ForeColor = $script:ACCENT
 
+# ===================== Timer & Events =====================
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 900
 $timer.Add_Tick({
@@ -1049,7 +1183,7 @@ $timer.Add_Tick({
 
 $form.Add_Shown({
     Update-Preview
-    Append-Log '就绪：输入 IP/域名后点击“一键打包 APK”。'
+    Append-Log '就绪：输入 IP/域名后点击 "一键打包 APK"。'
     Append-Log '提示：网页端口填后台/页面端口；WS端口用于房间和雷达数据，默认 8888。'
 })
 

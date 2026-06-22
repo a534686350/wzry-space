@@ -187,6 +187,11 @@ android {
     }
 }
 
+tasks.withType(JavaCompile).configureEach {
+    options.warnings = false
+    options.compilerArgs += ['-Xlint:none', '-nowarn']
+}
+
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
     dependsOn(generateRadarAppConfig)
 }

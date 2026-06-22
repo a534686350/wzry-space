@@ -72,8 +72,8 @@ public class MainActivity extends Activity {
     private static final int REQUEST_MEDIA_PROJECTION = 5001;
     private static final String CURRENT_VERSION_NAME = BuildConfig.APP_VERSION_NAME;
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
-    private static final int DEFAULT_FPS = 90;
-    private static final int[] FPS_VALUES = new int[]{60, 90, 120, 144};
+    private static final int DEFAULT_FPS = 60;
+    private static final int[] FPS_VALUES = new int[]{60};
 
     private final OkHttpClient http = new OkHttpClient();
     private final List<GameServer> servers = new ArrayList<>();
@@ -163,7 +163,8 @@ public class MainActivity extends Activity {
         }
         loggedIn = prefs.getBoolean("logged_in", false);
         appOnlyLogin = prefs.getBoolean("app_only_login", false);
-        secureMode = prefs.getBoolean("secure_mode", false);
+        secureMode = false;
+        prefs.edit().putBoolean("secure_mode", false).apply();
         themeIndex = prefs.getInt("theme", 0);
         minionLaneRotationSteps = prefs.getInt("minion_lane_rotation_steps", 0);
         heroIconScale = prefs.getFloat("hero_icon_scale", 1f);
@@ -179,7 +180,7 @@ public class MainActivity extends Activity {
         selectedRoomLabel = prefs.getString("selected_room", "");
         buyUrl = bundledBuyUrl;
         applyThemeColors();
-        applySecureMode();
+        clearActivitySecureMode();
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 10);
         loadAppLinks();
         booting = true;
@@ -206,9 +207,7 @@ public class MainActivity extends Activity {
     }
 
     private void handleAutoFitIntent(Intent intent) {
-        if (intent != null && intent.getBooleanExtra("request_auto_fit_capture", false)) {
-            requestAutoFitCapture();
-        }
+        pendingAutoFitCapture = false;
     }
 
     @Override
@@ -424,17 +423,7 @@ public class MainActivity extends Activity {
             setOverlaySkillPanel(on);
             setStatus(on ? "\u6280\u80fd\u72b6\u6001\u5df2\u663e\u793a" : "\u6280\u80fd\u72b6\u6001\u5df2\u9690\u85cf");
         }), lpTop(-2, 12));
-        drawCard.addView(switchRow("\u9632\u622a\u56fe", "\u5f00\u542f\u540e\u60ac\u6d6e\u7a97\u5185\u5bb9\u4e0d\u4f1a\u88ab\u622a\u56fe\u6355\u83b7", secureMode, on -> {
-            secureMode = on;
-            prefs.edit().putBoolean("secure_mode", secureMode).apply();
-            applySecureMode();
-            setStatus(secureMode ? "\u9632\u622a\u56fe\u5df2\u5f00\u542f" : "\u9632\u622a\u56fe\u5df2\u5173\u95ed");
-        }), lpTop(-2, 12));
-
-        LinearLayout toolCard = mgSection(root, "\u6821\u51c6\u5de5\u5177", "\u9002\u914d\u5c0f\u5730\u56fe\u3001\u8c03\u8282\u60ac\u6d6e\u7a97\u548c\u590d\u4f4d\u7ed8\u5236");
-        Button capturePermBtn = makeButton(NativeOverlayService.sProjectionData != null ? "\u622a\u5c4f\u6743\u9650\u5df2\u6388\u6743" : "\u6388\u6743\u622a\u5c4f / \u4e00\u952e\u9002\u914d");
-        capturePermBtn.setOnClickListener(v -> requestAutoFitCapture());
-        toolCard.addView(capturePermBtn, lpTop(42, 8));
+        LinearLayout toolCard = mgSection(root, "\u6821\u51c6\u5de5\u5177", "\u8c03\u8282\u60ac\u6d6e\u7a97\u548c\u590d\u4f4d\u7ed8\u5236");
 
         LinearLayout toolRow = new LinearLayout(this);
         toolRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -1968,15 +1957,14 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void applySecureMode() {
-        if (secureMode) getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
-        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    private void clearActivitySecureMode() {
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
     }
 
     private void toggleSecureMode() {
-        secureMode = !secureMode;
-        prefs.edit().putBoolean("secure_mode", secureMode).apply();
-        applySecureMode();
+        secureMode = false;
+        prefs.edit().putBoolean("secure_mode", false).apply();
+        clearActivitySecureMode();
         showRadarPage();
     }
 

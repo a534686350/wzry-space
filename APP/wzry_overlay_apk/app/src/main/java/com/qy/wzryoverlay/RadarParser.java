@@ -4,7 +4,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class RadarParser {
-    private static final Pattern SUMMONER_ID_PATTERN = Pattern.compile("(?<!\\d)(80\\d{3}|5555[1-5])(?!\\d)");
+    private static final Pattern SUMMONER_ID_PATTERN = Pattern.compile("(?<!\\d)(801162|80\\d{3}|5555[1-5]|5339[1-3])(?!\\d)");
     private static final Pattern FRAME_STAMP_PATTERN = Pattern.compile("###ST:\\d{13}\\s*$");
 
     private RadarParser() {
@@ -178,26 +178,34 @@ public final class RadarParser {
     }
 
     private static int pushSummonerIdsFromField(int[] ids, int count, String raw) {
+        return pushSummonerIdsFromField(ids, count, raw, false);
+    }
+
+    private static int pushSummonerIdsFromField(int[] ids, int count, String raw, boolean allowIconIndex) {
         if (raw == null) return count;
         String value = raw.trim();
         if (value.length() == 0) return count;
         String[] tokens = value.split("[,|;:/@\\s\\x00]+");
         for (String token : tokens) {
-            count = pushSummonerId(ids, count, token);
+            count = pushSummonerId(ids, count, token, allowIconIndex);
         }
         Matcher matcher = SUMMONER_ID_PATTERN.matcher(value);
         while (matcher.find()) {
-            count = pushSummonerId(ids, count, matcher.group(1));
+            count = pushSummonerId(ids, count, matcher.group(1), false);
         }
         return count;
     }
 
     private static int pushSummonerId(int[] ids, int count, String raw) {
+        return pushSummonerId(ids, count, raw, false);
+    }
+
+    private static int pushSummonerId(int[] ids, int count, String raw, boolean allowIconIndex) {
         if (raw == null) return count;
         String token = raw.trim();
         if (token.length() == 0 || token.indexOf('.') >= 0 || token.matches(".*[eE][+-]?\\d.*")) return count;
-        int value = toInt(token, 0);
-        if (!isSummonerSkillId(value) || contains(ids, count, value)) return count;
+        int value = normalizeSummonerSkillId(toInt(token, 0), allowIconIndex);
+        if (value == 0 || contains(ids, count, value)) return count;
         if (count >= ids.length) return count;
         ids[count++] = value;
         return count;
@@ -211,7 +219,45 @@ public final class RadarParser {
     }
 
     private static boolean isSummonerSkillId(int value) {
-        return (value >= 80001 && value <= 81999) || (value >= 55551 && value <= 55555);
+        return normalizeSummonerSkillId(value, false) != 0;
+    }
+
+    private static int normalizeSummonerSkillId(int value, boolean allowIconIndex) {
+        if (value == 801162) return 80116;
+        if (value >= 53391 && value <= 53393) return 80104;
+        if ((value >= 80001 && value <= 81999) || (value >= 55551 && value <= 55555)) return value;
+        if (!allowIconIndex) return 0;
+        switch (value) {
+            case 102:
+                return 80102;
+            case 103:
+                return 80103;
+            case 104:
+                return 80104;
+            case 105:
+                return 80105;
+            case 107:
+                return 80107;
+            case 108:
+                return 80108;
+            case 109:
+                return 80109;
+            case 110:
+                return 80110;
+            case 115:
+                return 80115;
+            case 116:
+            case 1162:
+                return 80116;
+            case 117:
+                return 80117;
+            case 118:
+                return 80118;
+            case 121:
+                return 80121;
+            default:
+                return 0;
+        }
     }
 
     private static int clampCd(int value, int max) {

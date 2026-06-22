@@ -273,12 +273,18 @@ public class HeroIconCache {
     }
 
     private int[] summonerIdChain(int skillId) {
+        if (skillId == 801162) return new int[]{80116, 80104};
+        if (skillId == 53391 || skillId == 53392 || skillId == 53393) return new int[]{80104};
+        if (skillId == 1162) return new int[]{80116, 80104};
         if (skillId == 80116) return new int[]{80116, 80104};
         if (skillId == 80117) return new int[]{80117, 80118};
         return new int[]{skillId};
     }
 
     private int canonicalSummonerId(int skillId) {
+        if (skillId == 801162) return 80104;
+        if (skillId == 53391 || skillId == 53392 || skillId == 53393) return 80104;
+        if (skillId == 1162) return 80104;
         if (skillId == 80116) return 80104;
         if (skillId == 80117) return 80118;
         return skillId;
