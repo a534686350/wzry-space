@@ -312,6 +312,64 @@ collect_inputs() {
     fi
 }
 
+setup_remi_php74_yum() {
+    local os_release major
+    os_release=""
+    major=""
+    if [[ -r /etc/os-release ]]; then
+        os_release="$(. /etc/os-release; printf '%s' "${ID:-}")"
+        major="$(. /etc/os-release; printf '%s' "${VERSION_ID%%.*}")"
+    fi
+
+    if [[ "$major" != "7" ]]; then
+        return
+    fi
+
+    case "$os_release" in
+        centos|rhel|rocky|almalinux|ol)
+            ;;
+        *)
+            return
+            ;;
+    esac
+
+    yum install -y epel-release yum-utils || true
+    if [[ ! -e /etc/yum.repos.d/remi.repo ]]; then
+        yum install -y https://rpms.remirepo.net/enterprise/remi-release-7.rpm || true
+    fi
+    yum-config-manager --disable 'remi-php*' >/dev/null 2>&1 || true
+    yum-config-manager --enable remi-php74 >/dev/null 2>&1 || true
+
+    if php -r 'exit(PHP_VERSION_ID >= 70400 ? 0 : 1);' >/dev/null 2>&1; then
+        return
+    fi
+
+    rpm -qa 'php*' 'php-*' 2>/dev/null | xargs -r yum remove -y || true
+}
+
+configure_php_fpm_runtime() {
+    local conf
+    for conf in /etc/php-fpm.d/www.conf /etc/php/*/fpm/pool.d/www.conf; do
+        if [[ -f "$conf" ]]; then
+            sed -i \
+                -e 's/^user = .*/user = nginx/' \
+                -e 's/^group = .*/group = nginx/' \
+                -e 's#^listen = .*#listen = 127.0.0.1:9000#' \
+                -e 's/^;*listen.allowed_clients.*/listen.allowed_clients = 127.0.0.1/' \
+                "$conf" || true
+        fi
+    done
+}
+
+install_java_runtime_yum() {
+    if command -v java >/dev/null 2>&1; then
+        return
+    fi
+    yum install -y java-17-openjdk-headless || \
+    yum install -y java-11-openjdk-headless || \
+    yum install -y java-1.8.0-openjdk-headless
+}
+
 install_packages() {
     green "正在安装基础环境：Nginx、PHP、MariaDB、Java、Git、端口工具"
     if command -v apt-get >/dev/null 2>&1; then
@@ -325,25 +383,28 @@ install_packages() {
             install -y \
             git curl rsync unzip sudo openssl ca-certificates cron \
             nginx mariadb-server mariadb-client \
-            php-cli php-fpm php-mysql php-curl php-mbstring php-xml \
+            php-cli php-fpm php-mysql php-curl php-mbstring php-xml php-json \
             openjdk-17-jre-headless ipset iptables ufw
     elif command -v dnf >/dev/null 2>&1; then
         dnf install -y epel-release || true
         dnf install -y \
             git curl rsync unzip sudo openssl cronie \
             nginx mariadb-server mariadb \
-            php-cli php-fpm php-mysqlnd php-curl php-mbstring php-xml \
+            php-cli php-fpm php-mysqlnd php-curl php-mbstring php-xml php-json \
             java-17-openjdk-headless ipset iptables-services firewalld
     elif command -v yum >/dev/null 2>&1; then
         yum install -y epel-release || true
+        setup_remi_php74_yum
         yum install -y \
             git curl rsync unzip sudo openssl cronie \
             nginx mariadb-server mariadb \
-            php-cli php-fpm php-mysqlnd php-curl php-mbstring php-xml \
-            java-17-openjdk-headless ipset iptables-services firewalld
+            php-cli php-fpm php-mysqlnd php-curl php-mbstring php-xml php-json \
+            ipset iptables-services firewalld
+        install_java_runtime_yum
     else
         die "暂不支持此 Linux 发行版，需要 apt、dnf 或 yum"
     fi
+    configure_php_fpm_runtime
     green "基础环境安装完成"
 }
 
@@ -481,6 +542,7 @@ deploy_web_files() {
 
 patch_runtime_service_scripts() {
     local file="$SITE_DIR/install-services.sh"
+    local start_file="$SITE_DIR/start-server.sh"
     [[ -f "$file" ]] || return 0
     # The upstream APP script may still require restore-whitelist.service.
     # On fresh CentOS 7 installs that oneshot can fail while the DB/IP set is
@@ -488,7 +550,27 @@ patch_runtime_service_scripts() {
     sed -i \
         -e 's/^Requires=restore-whitelist\.service$/Wants=restore-whitelist.service/' \
         -e 's/^systemctl start restore-whitelist\.service$/systemctl start restore-whitelist.service || echo "restore-whitelist start failed, skipped"/' \
+        -e 's#HOME_SERVER_EXEC="/usr/bin/java -jar \$JAR_PATH --server.port=18888 --ws.port=19999"#HOME_SERVER_EXEC="/usr/bin/java -jar \$JAR_PATH"#' \
         "$file"
+    if [[ -f "$start_file" ]]; then
+        cat > "$start_file" <<'EOF'
+#!/bin/bash
+set -e
+
+JAR="home-server-0.0.1-SNAPSHOT.jar"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+JAR_PATH="$SCRIPT_DIR/$JAR"
+
+if [ ! -f "$JAR_PATH" ]; then
+    echo "[error] Missing $JAR_PATH"
+    exit 1
+fi
+
+echo "[start] home-server uses public ports 8888 / 9999 directly"
+exec java -jar "$JAR_PATH"
+EOF
+        chmod +x "$start_file"
+    fi
 }
 
 patch_frontend_runtime() {
@@ -776,7 +858,7 @@ detect_web_user() {
 disable_default_nginx_site() {
     local ts
     ts="$(date +%Y%m%d%H%M%S)"
-    for file in /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf; do
+    for file in /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf /etc/nginx/conf.d/welcome.conf; do
         if [[ -e "$file" ]]; then
             mv "$file" "${file}.disabled-by-wzry-${ts}"
         fi
@@ -795,8 +877,8 @@ write_nginx_configs() {
 
     cat > "$site_conf" <<NGINX
 server {
-    listen $SITE_PORT;
-    server_name $SERVER_NAME 127.0.0.1 localhost;
+    listen $SITE_PORT default_server;
+    server_name $SERVER_NAME 127.0.0.1 localhost _;
 
     root $SITE_DIR;
     index index.html index.php;
@@ -810,7 +892,17 @@ server {
         deny all;
     }
 
+    location = /admin {
+        return 301 /admin/;
+    }
+
+    location /admin/ {
+        index index.php;
+        try_files \$uri \$uri/ /admin/index.php?\$query_string;
+    }
+
     location ~ \\.php$ {
+        try_files \$uri =404;
         include fastcgi_params;
         fastcgi_pass $php_fastcgi;
         fastcgi_index index.php;
@@ -825,90 +917,9 @@ server {
 }
 NGINX
 
-    cat > "$ws_conf" <<'NGINX'
-server {
-    listen 8888;
-
-    location /ws {
-        auth_request /ws_auth;
-        error_page 401 403 = @ws_deny;
-
-        proxy_pass http://127.0.0.1:18888;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-    }
-
-    location = /ws_auth {
-        internal;
-        proxy_pass http://127.0.0.1/api/index.php?module=check_ws_access;
-        proxy_pass_request_body off;
-        proxy_set_header Content-Length "";
-        proxy_set_header Host 127.0.0.1;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header Cookie $http_cookie;
-    }
-
-    location @ws_deny {
-        add_header Content-Type application/json;
-        return 403 '{"code":403,"msg":"请先登录后再使用"}';
-    }
-
-    location / {
-        auth_request /ws_auth;
-        error_page 401 403 = @ws_deny;
-        proxy_pass http://127.0.0.1:18888;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-
-server {
-    listen 9999;
-
-    location /ws {
-        auth_request /ws_auth;
-        error_page 401 403 = @ws_deny;
-
-        proxy_pass http://127.0.0.1:19999;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-    }
-
-    location = /ws_auth {
-        internal;
-        proxy_pass http://127.0.0.1/api/index.php?module=check_ws_access;
-        proxy_pass_request_body off;
-        proxy_set_header Content-Length "";
-        proxy_set_header Host 127.0.0.1;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header Cookie $http_cookie;
-    }
-
-    location @ws_deny {
-        add_header Content-Type application/json;
-        return 403 '{"code":403,"msg":"请先登录后再使用"}';
-    }
-
-    location / {
-        auth_request /ws_auth;
-        error_page 401 403 = @ws_deny;
-        proxy_pass http://127.0.0.1:19999;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-NGINX
-
+    if [[ -e "$ws_conf" ]]; then
+        mv "$ws_conf" "${ws_conf}.disabled-by-wzry-$(date +%Y%m%d%H%M%S)"
+    fi
     chown -R "$web_user:$web_user" "$SITE_DIR" || true
     find "$SITE_DIR" -type d -exec chmod 755 {} \;
     find "$SITE_DIR" -type f -exec chmod 644 {} \;
@@ -975,11 +986,9 @@ configure_firewall() {
             nft add rule inet filter input tcp dport 8888 accept 2>/dev/null || true
             nft add rule inet filter input tcp dport 9999 accept 2>/dev/null || true
         fi
-        iptables -C INPUT -p tcp --dport 18888 ! -s 127.0.0.1 -j DROP 2>/dev/null || iptables -I INPUT -p tcp --dport 18888 ! -s 127.0.0.1 -j DROP
-        iptables -C INPUT -p tcp --dport 19999 ! -s 127.0.0.1 -j DROP 2>/dev/null || iptables -I INPUT -p tcp --dport 19999 ! -s 127.0.0.1 -j DROP
     fi
 
-    green "端口处理完成：${SITE_PORT}/8888/9999 已尝试开放，18888/19999 已限制为本机内部端口"
+    green "端口处理完成：${SITE_PORT}/8888/9999 已尝试开放"
     yellow "如果云厂商安全组仍拦截，请在云厂商控制台放行 ${SITE_PORT}、8888、9999。服务器内防火墙已在 SSH 中处理。"
 }
 

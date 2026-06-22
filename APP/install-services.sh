@@ -33,7 +33,7 @@ if [ -f "$START_SCRIPT" ]; then
     chmod +x "$START_SCRIPT"
     HOME_SERVER_EXEC="/bin/bash $START_SCRIPT"
 else
-    HOME_SERVER_EXEC="/usr/bin/java -jar $JAR_PATH --server.port=18888 --ws.port=19999"
+    HOME_SERVER_EXEC="/usr/bin/java -jar $JAR_PATH"
 fi
 
 # -------- 1. 安装 home-server systemd 服务 --------
