@@ -10,8 +10,10 @@ const WEB_ROOT_NAME = '\u7f51\u9875\u6e90\u7801';
 const APP_DIR_NAME = '\u4e00\u952e\u90e8\u7f72\u5668';
 const WEB_DIR = path.resolve(__dirname, '..', WEB_ROOT_NAME);
 const DEPLOYER_DIR = __dirname;
+const SCRIPTS_DIR = path.resolve(__dirname, '..', 'scripts');
 const REMOTE_WEB_DIR = `${REMOTE_DIR}/${WEB_ROOT_NAME}`;
 const REMOTE_APP_DIR = `${REMOTE_DIR}/${APP_DIR_NAME}`;
+const REMOTE_SCRIPTS_DIR = `${REMOTE_DIR}/scripts`;
 
 function parseArgs() {
   const args = {};
@@ -110,7 +112,7 @@ async function main() {
 
   try {
     console.log('Creating remote dirs...');
-    await sshExec(conn, `mkdir -p '${REMOTE_WEB_DIR}' '${REMOTE_APP_DIR}/public'`);
+    await sshExec(conn, `mkdir -p '${REMOTE_WEB_DIR}' '${REMOTE_APP_DIR}/public' '${REMOTE_SCRIPTS_DIR}'`);
 
     console.log('Uploading web source...');
     const sftp = await new Promise((res, rej) => conn.sftp((e, s) => e ? rej(e) : res(s)));
@@ -118,6 +120,11 @@ async function main() {
 
     console.log('Uploading deployer...');
     await uploadDir(sftp, DEPLOYER_DIR, REMOTE_APP_DIR);
+
+    if (fs.existsSync(SCRIPTS_DIR)) {
+      console.log('Uploading install scripts...');
+      await uploadDir(sftp, SCRIPTS_DIR, REMOTE_SCRIPTS_DIR);
+    }
 
     console.log('Checking Node.js...');
     try {

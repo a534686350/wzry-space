@@ -1824,7 +1824,8 @@ function buildOpsInstallCommand(creds, installCode) {
   const localInstallScriptB64 = loadLocalOpsInstallScriptBase64();
   const scriptSetup = localInstallScriptB64
     ? [
-        'SRC=local',
+        'SRC=gitee',
+        'INSTALL_SCRIPT_SRC=local',
         `cat > /tmp/wzry-install.sh.b64 <<'WZRY_INSTALL_B64'\n${localInstallScriptB64}\nWZRY_INSTALL_B64`,
         'base64 -d /tmp/wzry-install.sh.b64 > /tmp/wzry-install.sh',
       ]

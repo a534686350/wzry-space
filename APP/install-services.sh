@@ -43,7 +43,7 @@ cat > /etc/systemd/system/home-server.service << EOF
 [Unit]
 Description=Home Server (WebSocket 雷达数据服务)
 After=network.target restore-whitelist.service
-Requires=restore-whitelist.service
+Wants=restore-whitelist.service
 
 [Service]
 Type=simple
@@ -197,9 +197,13 @@ echo -e "${GREEN}=== 7. 启动所有服务 ===${NC}"
 
 systemctl daemon-reload
 
-systemctl enable restore-whitelist.service
-systemctl start restore-whitelist.service
-echo "restore-whitelist: $(systemctl is-active restore-whitelist.service)"
+systemctl enable restore-whitelist.service || true
+if systemctl start restore-whitelist.service; then
+    echo "restore-whitelist: $(systemctl is-active restore-whitelist.service)"
+else
+    echo -e "${YELLOW}⚠ restore-whitelist 启动失败，已跳过；登录用户后白名单仍会动态写入，可稍后手动检查。${NC}"
+    journalctl -u restore-whitelist.service -n 20 --no-pager 2>/dev/null || true
+fi
 
 systemctl enable home-server.service
 systemctl start home-server.service

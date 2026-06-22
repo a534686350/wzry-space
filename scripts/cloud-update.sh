@@ -136,9 +136,9 @@ sync_source() {
     local url
     url="$(repo_url)"
     if [[ -d "$SRC_DIR/.git" ]]; then
-        git -C "$SRC_DIR" remote set-url origin "$url"
-        git -C "$SRC_DIR" fetch --prune origin "$BRANCH"
-        git -C "$SRC_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
+        (cd "$SRC_DIR" && git remote set-url origin "$url")
+        (cd "$SRC_DIR" && git fetch --prune origin "$BRANCH")
+        (cd "$SRC_DIR" && git checkout -B "$BRANCH" "origin/$BRANCH")
     else
         [[ ! -e "$SRC_DIR" ]] || die "$SRC_DIR 已存在，但不是 Git 仓库"
         mkdir -p "$(dirname "$SRC_DIR")"
@@ -360,7 +360,7 @@ print_summary() {
     local base_url app_file commit
     base_url="$(site_base_url)"
     app_file="$(latest_apk_name)"
-    commit="$(git -C "$SRC_DIR" rev-parse --short HEAD 2>/dev/null || true)"
+    commit="$(cd "$SRC_DIR" && git rev-parse --short HEAD 2>/dev/null || true)"
 
     green "========================================"
     green "  远程更新完成"

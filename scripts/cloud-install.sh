@@ -412,17 +412,38 @@ sync_source() {
     clean_url="$(repo_clean_url)"
 
     if [[ -d "$SRC_DIR/.git" ]]; then
-        git -C "$SRC_DIR" remote set-url origin "$clone_url"
-        git -C "$SRC_DIR" fetch --prune origin "$BRANCH"
-        git -C "$SRC_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
-        git -C "$SRC_DIR" remote set-url origin "$clean_url" || true
+        (cd "$SRC_DIR" && git remote set-url origin "$clone_url")
+        if ! (cd "$SRC_DIR" && git fetch --prune origin "$BRANCH"); then
+            if [[ -z "$REPO_URL" && ( "$SOURCE" == "gitee" || "$SOURCE" == "github" ) ]]; then
+                SOURCE=$([[ "$SOURCE" == "gitee" ]] && printf 'github' || printf 'gitee')
+                yellow "当前源码源下载失败，自动切换到 $SOURCE 重试..."
+                clone_url="$(build_repo_url)"
+                clean_url="$(repo_clean_url)"
+                (cd "$SRC_DIR" && git remote set-url origin "$clone_url")
+                (cd "$SRC_DIR" && git fetch --prune origin "$BRANCH")
+            else
+                die "源码下载失败，请检查仓库地址、分支或服务器网络"
+            fi
+        fi
+        (cd "$SRC_DIR" && git checkout -B "$BRANCH" "origin/$BRANCH")
+        (cd "$SRC_DIR" && git remote set-url origin "$clean_url") || true
     else
         if [[ -e "$SRC_DIR" ]]; then
             die "$SRC_DIR 已存在，但不是 Git 仓库"
         fi
         mkdir -p "$(dirname "$SRC_DIR")"
-        git clone --branch "$BRANCH" --depth 1 "$clone_url" "$SRC_DIR"
-        git -C "$SRC_DIR" remote set-url origin "$clean_url" || true
+        if ! git clone --branch "$BRANCH" --depth 1 "$clone_url" "$SRC_DIR"; then
+            if [[ -z "$REPO_URL" && ( "$SOURCE" == "gitee" || "$SOURCE" == "github" ) ]]; then
+                SOURCE=$([[ "$SOURCE" == "gitee" ]] && printf 'github' || printf 'gitee')
+                yellow "当前源码源下载失败，自动切换到 $SOURCE 重试..."
+                clone_url="$(build_repo_url)"
+                clean_url="$(repo_clean_url)"
+                git clone --branch "$BRANCH" --depth 1 "$clone_url" "$SRC_DIR" || die "源码下载失败，请检查仓库地址、分支或服务器网络"
+            else
+                die "源码下载失败，请检查仓库地址、分支或服务器网络"
+            fi
+        fi
+        (cd "$SRC_DIR" && git remote set-url origin "$clean_url") || true
     fi
 
     green "源码下载完成"
@@ -452,9 +473,22 @@ deploy_web_files() {
 
     chmod +x "$SITE_DIR"/*.sh 2>/dev/null || true
     mkdir -p "$SITE_DIR/logs"
+    patch_runtime_service_scripts
     patch_frontend_runtime
     install_license_runtime
     green "前端搭建完成"
+}
+
+patch_runtime_service_scripts() {
+    local file="$SITE_DIR/install-services.sh"
+    [[ -f "$file" ]] || return 0
+    # The upstream APP script may still require restore-whitelist.service.
+    # On fresh CentOS 7 installs that oneshot can fail while the DB/IP set is
+    # still empty; it must not block the main home-server deployment.
+    sed -i \
+        -e 's/^Requires=restore-whitelist\.service$/Wants=restore-whitelist.service/' \
+        -e 's/^systemctl start restore-whitelist\.service$/systemctl start restore-whitelist.service || echo "restore-whitelist start failed, skipped"/' \
+        "$file"
 }
 
 patch_frontend_runtime() {
@@ -645,11 +679,25 @@ import_sql_file() {
     local file="$1"
     local force="${2:-0}"
     [[ -f "$file" ]] || return 0
+    patch_mysql55_sql_file "$file"
     if [[ "$force" == "1" ]]; then
         mysql_app --force < "$file"
     else
         mysql_app < "$file"
     fi
+}
+
+patch_mysql55_sql_file() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    # CentOS 7 ships MariaDB 5.5, which does not allow DATETIME DEFAULT
+    # CURRENT_TIMESTAMP and also lacks some newer DDL conveniences. Keep this
+    # patch narrow so newer servers still receive valid SQL.
+    sed -i \
+        -e "s/datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP/timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP/gI" \
+        -e "s/datetime NOT NULL DEFAULT CURRENT_TIMESTAMP/datetime NOT NULL DEFAULT '1970-01-01 00:00:01'/gI" \
+        -e "s/timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP/timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP/gI" \
+        "$file"
 }
 
 init_database() {
@@ -675,12 +723,10 @@ init_database() {
     green "正在创建数据库和导入数据表..."
     mysql_root <<SQL
 CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS '$db_user_sql'@'localhost' IDENTIFIED BY '$db_pass_sql';
-CREATE USER IF NOT EXISTS '$db_user_sql'@'127.0.0.1' IDENTIFIED BY '$db_pass_sql';
-ALTER USER '$db_user_sql'@'localhost' IDENTIFIED BY '$db_pass_sql';
-ALTER USER '$db_user_sql'@'127.0.0.1' IDENTIFIED BY '$db_pass_sql';
-GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$db_user_sql'@'localhost';
-GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$db_user_sql'@'127.0.0.1';
+DELETE FROM mysql.user WHERE User='$db_user_sql' AND Host IN ('localhost','127.0.0.1');
+FLUSH PRIVILEGES;
+GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$db_user_sql'@'localhost' IDENTIFIED BY '$db_pass_sql';
+GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$db_user_sql'@'127.0.0.1' IDENTIFIED BY '$db_pass_sql';
 FLUSH PRIVILEGES;
 SQL
 
