@@ -40,10 +40,10 @@ app/build/outputs/apk/debug/app-debug.apk
 
 ## 服务端要求
 
-网站页面能打开，并且你的 `home-server-0.0.1-SNAPSHOT.jar` 在服务器运行，`8888` 端口已放行：
+网站页面能打开，并且你的 `wz.jar` 在服务器运行，`8888` 端口已放行：
 
 ```bash
-java -jar home-server-0.0.1-SNAPSHOT.jar
+java -jar wz.jar
 ```
 
 WebSocket 地址应能访问：

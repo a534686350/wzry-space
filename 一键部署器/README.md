@@ -27,7 +27,7 @@
 ```
 S43雷达共享源码纯净版/
 ├── 网页源码/                    ← 要被部署的源码（会自动上传）
-│   ├── home-server-0.0.1-SNAPSHOT.jar
+│   ├── wz.jar
 │   ├── index.html
 │   ├── .user.ini
 │   ├── layui/

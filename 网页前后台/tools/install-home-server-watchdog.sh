@@ -3,7 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
-JAR_PATH="${PROJECT_DIR}/home-server-0.0.1-SNAPSHOT.jar"
+JAR_PATH="${PROJECT_DIR}/wz.jar"
 TOOLS_DIR="${PROJECT_DIR}/tools"
 LOG_DIR="${PROJECT_DIR}/logs"
 JAVA_BIN="${JAVA_BIN:-$(command -v java || true)}"

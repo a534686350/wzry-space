@@ -270,8 +270,8 @@
         
         /* 面板样式 */
         .panel {
-            background: linear-gradient(135deg, rgba(47, 54, 60, 0.97) 0%, rgba(26, 31, 36, 0.97) 100%);
-            border: 1px solid rgba(74, 158, 255, 0.2);
+            background: linear-gradient(135deg, rgba(56, 68, 82, 0.98) 0%, rgba(36, 48, 62, 0.98) 100%);
+            border: 1px solid rgba(116, 180, 255, 0.38);
             border-radius: 16px;
             padding: 20px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
@@ -317,7 +317,7 @@
             text-align: left;
             font-family: inherit;
             box-sizing: border-box;
-            border-bottom: 1px solid rgba(74, 158, 255, 0.15);
+            border-bottom: 1px solid rgba(116, 180, 255, 0.28);
             transition: background 0.2s ease;
         }
         
@@ -347,7 +347,7 @@
         
         .hero-skill-hint {
             font-size: 12px;
-            color: #94a3b8;
+            color: #c8d7e8;
             line-height: 1.5;
             margin: 12px 0 14px;
         }
@@ -523,6 +523,7 @@
             display: flex;
             align-items: center;
             gap: 5px;
+            color: #7dd3fc;
         }
 
         .map-offset-block-title::before {
@@ -544,6 +545,12 @@
             background: rgba(15, 23, 42, 0.4);
             border-radius: 4px;
             transition: all 0.2s ease;
+        }
+
+        .map-offset-block span,
+        .map-offset-row,
+        .map-offset-row label {
+            color: #7dd3fc !important;
         }
 
         .map-offset-row:hover {
@@ -1349,7 +1356,7 @@
             background: linear-gradient(135deg, #6bb6ff 0%, #4a9eff 100%);
         }
         
-    </style>
+</style>
 </head>
 <body>
     <div id="siteAnnounceOverlay" class="site-announce-overlay" style="display: none;" aria-hidden="true">
@@ -1374,6 +1381,7 @@
         
         <!-- 雷达地图 -->
         <section class="radar">
+            <button id="radarExitFullscreen" type="button" style="display:none;position:absolute;top:14px;right:14px;z-index:30;padding:7px 14px;border:none;border-radius:999px;background:#ef4444;color:#fff;font-weight:800;cursor:pointer;box-shadow:0 8px 20px rgba(0,0,0,.35);">退出全屏</button>
             <canvas id="myCanvas" width="340" height="340"></canvas>
             <div class="radar-ws-hud" id="radarWsHud" title="共享延迟：需 gameData 包末尾带 ###ST:13位毫秒时间戳（由共享端或 Jar 在打包时写入）；无则显示「同步延迟」（网页拉取往返）。重连：断线后自动连上次数（不含首次）">
                 <span id="wsLatencyText">共享延迟: --</span><span class="radar-ws-hud-sep" aria-hidden="true">|</span><span id="wsReconnectText">重连: 0</span>
@@ -1384,13 +1392,46 @@
         <button id="toggleSidebarBtn" class="sidebar-toggle-btn" type="button">隐藏侧边栏</button>
 
         <!-- 悬浮工具栏（全屏按钮、兵线修复按钮） -->
-        <div class="floating-toolbar">
-            <button id="radarFullscreenToggle" class="floating-toolbar-btn fullscreen-btn" type="button">全屏</button>
-            <button id="btnMinionLaneFixFloat" class="floating-toolbar-btn minion-fix-btn" type="button" title="兵线方向与地图不一致时，点击旋转兵线直至与三路推进方向一致">修复兵线</button>
-        </div>
+        <div class="floating-toolbar" style="display:none;"></div>
         
         <!-- 侧边栏 -->
         <aside class="sidebar">
+            <div class="panel panel-collapsible" id="mapStylePanel">
+                <button type="button" class="panel-collapsible-toggle" id="mapStyleToggle" aria-expanded="true" aria-controls="mapStyleContent">
+                    <span class="panel-collapsible-title">地图显示</span>
+                    <span class="panel-collapsible-icon" id="mapStyleIcon" aria-hidden="true">▼</span>
+                </button>
+                <div class="panel-collapsible-content" id="mapStyleContent">
+                    <button id="radarFullscreenToggle" type="button" style="width:100%;padding:8px 12px;border:none;border-radius:8px;background:#4a9eff;color:#fff;font-weight:700;cursor:pointer;margin-bottom:8px;">全屏</button>
+                    <button id="btnMinionLaneFix" type="button" style="width:100%;padding:8px 12px;border:none;border-radius:8px;background:#c45a05;color:#fff;font-weight:700;cursor:pointer;margin-bottom:8px;">修复兵线</button>
+                    <button id="btnToggleMapStyle" type="button" style="width:100%;padding:8px 12px;border:none;border-radius:8px;background:#4a9eff;color:#fff;font-weight:700;cursor:pointer;">切换地图</button>
+                    <div id="mapStyleText" class="hero-skill-hint" style="margin:8px 0 0;">当前：地图 1</div>
+                </div>
+            </div>
+            <div class="panel panel-collapsible" id="scaleControlPanel">
+                <button type="button" class="panel-collapsible-toggle" id="scaleControlToggle" aria-expanded="false" aria-controls="scaleControlContent">
+                    <span class="panel-collapsible-title">独立缩放</span>
+                    <span class="panel-collapsible-icon" id="scaleControlIcon" aria-hidden="true">▶</span>
+                </button>
+                <div class="panel-collapsible-content" id="scaleControlContent" hidden>
+                    <div class="map-offset-row">
+                        <label for="heroScale">英雄</label>
+                        <input type="range" id="heroScale" min="0.5" max="2" value="1" step="0.05">
+                        <span class="map-offset-val" id="heroScaleVal">1.00</span>
+                    </div>
+                    <div class="map-offset-row">
+                        <label for="monsterScale">野怪</label>
+                        <input type="range" id="monsterScale" min="0.5" max="2" value="1" step="0.05">
+                        <span class="map-offset-val" id="monsterScaleVal">1.00</span>
+                    </div>
+                    <div class="map-offset-row">
+                        <label for="minionScale">兵线</label>
+                        <input type="range" id="minionScale" min="0.5" max="2" value="1" step="0.05">
+                        <span class="map-offset-val" id="minionScaleVal">1.00</span>
+                    </div>
+                    <button type="button" class="map-calib-reset" id="scaleControlReset">恢复默认缩放</button>
+                </div>
+            </div>
             <!-- 小地图元素位置校准（可折叠，默认折叠） -->
             <div class="panel panel-collapsible" id="mapCalibrationPanel">
                 <button type="button" class="panel-collapsible-toggle" id="mapCalibToggle" aria-expanded="false" aria-controls="mapCalibContent">
@@ -1925,6 +1966,9 @@
         var mapOffsetHeroX = 0, mapOffsetHeroY = 0;
         var mapOffsetMinionX = 0, mapOffsetMinionY = 0;
         var mapOffsetMonsterX = 0, mapOffsetMonsterY = 0;
+        var heroScaleFactor = 1;
+        var monsterScaleFactor = 1;
+        var minionScaleFactor = 1;
         (function loadMapOffsetsFromStorage() {
             function clampOff(v) {
                 if (isNaN(v)) return 0;
@@ -1943,6 +1987,14 @@
             mapOffsetMinionY = r('mapOffsetMinionY');
             mapOffsetMonsterX = r('mapOffsetMonsterX');
             mapOffsetMonsterY = r('mapOffsetMonsterY');
+            function rs(key) {
+                var n = parseFloat(localStorage.getItem(key));
+                if (!isFinite(n)) return 1;
+                return Math.max(0.5, Math.min(2, n));
+            }
+            heroScaleFactor = rs('heroScaleFactor');
+            monsterScaleFactor = rs('monsterScaleFactor');
+            minionScaleFactor = rs('minionScaleFactor');
         })();
         var intervalIds = [];
         var animationFrameId = null;
@@ -2307,6 +2359,7 @@
         applyCanvasImageSmoothing();
         const radarContainer = document.querySelector('.radar');
         const radarFullscreenToggle = document.getElementById('radarFullscreenToggle');
+        const radarExitFullscreen = document.getElementById('radarExitFullscreen');
         const btnMinionLaneFix = document.getElementById('btnMinionLaneFix');
         const btnMinionLaneFixFloat = document.getElementById('btnMinionLaneFixFloat');
         let isRadarFullscreen = false;
@@ -2358,6 +2411,31 @@
         let mapActualHeight = 340; // map.png的实际高度（像素）
         let mapWidth = 340;
         let mapHeight = 340;
+        var radarMapList = [
+            { label: '地图 1', src: 'map.png' },
+            { label: '地图 2', src: 'map2.png' },
+            { label: '地图 3', src: 'map3.png' }
+        ];
+        var radarMapIndex = 0;
+        var radarMapFallback = false;
+        function updateMapStyleText() {
+            var el = document.getElementById('mapStyleText');
+            if (!el) return;
+            var item = radarMapList[radarMapIndex] || radarMapList[0];
+            el.textContent = '当前：' + item.label + (radarMapFallback ? '（资源缺失，已回退）' : '');
+        }
+        function setRadarMap(index, persist) {
+            var next = Number(index);
+            if (!Number.isFinite(next)) next = 0;
+            next = ((Math.floor(next) % radarMapList.length) + radarMapList.length) % radarMapList.length;
+            radarMapIndex = next;
+            radarMapFallback = false;
+            if (persist !== false) {
+                try { localStorage.setItem('radar_map_style', String(radarMapIndex)); } catch (e) {}
+            }
+            updateMapStyleText();
+            mapImage.src = radarMapList[radarMapIndex].src;
+        }
         
         /**
          * 兵线坐标绕地图中心逆时针旋转 steps×90°（仅影响兵线圆点，不改变英雄/野怪）
@@ -2535,12 +2613,14 @@
                 if (radarFullscreenToggle) {
                     radarFullscreenToggle.textContent = '退出全屏';
                 }
+                if (radarExitFullscreen) radarExitFullscreen.style.display = 'inline-flex';
             } else {
                 radarContainer.classList.remove('radar-fullscreen');
                 document.body.classList.remove('radar-fullscreen-active');
                 if (radarFullscreenToggle) {
                     radarFullscreenToggle.textContent = '全屏';
                 }
+                if (radarExitFullscreen) radarExitFullscreen.style.display = 'none';
             }
             updateCanvasSize();
         }
@@ -2551,6 +2631,9 @@
         
         if (radarFullscreenToggle) {
             radarFullscreenToggle.addEventListener('click', toggleRadarFullscreen);
+        }
+        if (radarExitFullscreen) {
+            radarExitFullscreen.addEventListener('click', function() { setRadarFullscreen(false); });
         }
         
         window.addEventListener('resize', function() {
@@ -2576,11 +2659,32 @@
         };
         
         mapImage.onerror = function() {
-            console.warn('无法加载map.png，使用默认尺寸');
+            console.warn('无法加载地图资源:', radarMapList[radarMapIndex] && radarMapList[radarMapIndex].src);
+            if (radarMapIndex !== 0) {
+                radarMapFallback = true;
+                radarMapIndex = 0;
+                updateMapStyleText();
+                mapImage.src = radarMapList[0].src;
+                return;
+            }
             updateCanvasSize();
         };
-        
-        mapImage.src = 'map.png';
+        try {
+            radarMapIndex = parseInt(localStorage.getItem('radar_map_style') || '0', 10) || 0;
+        } catch (e) {
+            radarMapIndex = 0;
+        }
+        setRadarMap(radarMapIndex, false);
+        document.addEventListener('DOMContentLoaded', function() {
+            var btn = document.getElementById('btnToggleMapStyle');
+            if (!btn) return;
+            btn.addEventListener('click', function() {
+                setRadarMap(radarMapIndex + 1, true);
+                if (typeof showSuccess === 'function') {
+                    showSuccess('已切换到' + ((radarMapList[radarMapIndex] && radarMapList[radarMapIndex].label) || '地图'), 1600);
+                }
+            });
+        });
         
         // 初始缩放比例（如果map加载失败时使用）
         updateCanvasSize();
@@ -3086,6 +3190,60 @@
                 });
             }
         }
+
+        function persistMapScales() {
+            try {
+                localStorage.setItem('heroScaleFactor', String(heroScaleFactor));
+                localStorage.setItem('monsterScaleFactor', String(monsterScaleFactor));
+                localStorage.setItem('minionScaleFactor', String(minionScaleFactor));
+            } catch (e) { /* ignore */ }
+        }
+
+        function initMapScalePanel() {
+            var pairs = [
+                { id: 'heroScale', label: 'heroScaleVal', get: function() { return heroScaleFactor; }, set: function(v) { heroScaleFactor = v; } },
+                { id: 'monsterScale', label: 'monsterScaleVal', get: function() { return monsterScaleFactor; }, set: function(v) { monsterScaleFactor = v; } },
+                { id: 'minionScale', label: 'minionScaleVal', get: function() { return minionScaleFactor; }, set: function(v) { minionScaleFactor = v; } }
+            ];
+            function clampScale(v) {
+                var n = parseFloat(v);
+                if (!isFinite(n)) return 1;
+                return Math.max(0.5, Math.min(2, n));
+            }
+            function redrawIfData() {
+                if (lastProcessedGameData) processGameData(lastProcessedGameData);
+                else clearCanvas();
+            }
+            pairs.forEach(function(p) {
+                var inp = document.getElementById(p.id);
+                var span = document.getElementById(p.label);
+                if (!inp) return;
+                inp.value = String(p.get());
+                if (span) span.textContent = p.get().toFixed(2);
+                inp.addEventListener('input', function() {
+                    var v = clampScale(inp.value);
+                    p.set(v);
+                    if (span) span.textContent = v.toFixed(2);
+                    persistMapScales();
+                    redrawIfData();
+                });
+            });
+            var reset = document.getElementById('scaleControlReset');
+            if (reset) {
+                reset.addEventListener('click', function() {
+                    pairs.forEach(function(p) {
+                        p.set(1);
+                        var inp = document.getElementById(p.id);
+                        var span = document.getElementById(p.label);
+                        if (inp) inp.value = '1';
+                        if (span) span.textContent = '1.00';
+                    });
+                    persistMapScales();
+                    redrawIfData();
+                    showSuccess('已恢复默认缩放', 1500);
+                });
+            }
+        }
         
         // 兵线渲染开关
         var hideAllMinions = false;
@@ -3124,7 +3282,7 @@
                 // 应用缩放（与地图同一套正方形坐标变换）
                 var scaledX = gameCoordOffX + x * gameCoordScale;
                 var scaledY = gameCoordOffY + y * gameCoordScale;
-                var scaledRadius = radius * gameCoordScale;
+                var scaledRadius = radius * gameCoordScale * minionScaleFactor;
                 
                 // 验证坐标是否在canvas范围内（可选，允许超出范围绘制）
                 context.beginPath();
@@ -3220,8 +3378,8 @@
                 if(image.complete && image.naturalWidth > 0) {
                     x = gameCoordOffX + Number(x) * gameCoordScale;
                     y = gameCoordOffY + Number(y) * gameCoordScale;
-                    width = Number(width) * gameCoordScale;
-                    height = Number(height) * gameCoordScale;
+                    width = Number(width) * gameCoordScale * heroScaleFactor;
+                    height = Number(height) * gameCoordScale * heroScaleFactor;
                     zy = Number(zy);
                     hc = Number(hc);
                     
@@ -5251,8 +5409,11 @@
             initHeroSkillPanelCollapse();
             initCollapsiblePanel('roomListToggle', 'roomListContent', 'roomListIcon');
             initCollapsiblePanel('shareLinkToggle', 'shareLinkContent', 'shareLinkIcon');
+            initCollapsiblePanel('mapStyleToggle', 'mapStyleContent', 'mapStyleIcon');
+            initCollapsiblePanel('scaleControlToggle', 'scaleControlContent', 'scaleControlIcon');
             initCollapsiblePanel('mapCalibToggle', 'mapCalibContent', 'mapCalibIcon');
             initMapCalibrationPanel();
+            initMapScalePanel();
             // 英雄、兵线、野怪子折叠面板（互斥展开）
             function initOffsetPanel(toggleId, contentId, iconId) {
                 var toggle = document.getElementById(toggleId);

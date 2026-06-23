@@ -4,6 +4,7 @@ const path = require('path');
 const http = require('http');
 const fs = require('fs');
 const crypto = require('crypto');
+const { execFile } = require('child_process');
 const express = require('express');
 const { Server: SocketIOServer } = require('socket.io');
 const { Client } = require('ssh2');
@@ -69,19 +70,26 @@ const ADMIN_SESSION_TTL_MS = Math.max(1800000, Number(process.env.ADMIN_SESSION_
 const ADMIN_LOGIN_WINDOW_MS = Math.max(60000, Number(process.env.ADMIN_LOGIN_WINDOW_MS || 900000) || 900000);
 const ADMIN_LOGIN_MAX_FAILURES = Math.max(3, Number(process.env.ADMIN_LOGIN_MAX_FAILURES || 10) || 10);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const OPS_SOURCE_PACKAGE_FILE =
+  process.env.OPS_SOURCE_PACKAGE_FILE || path.join(DATA_DIR, 'ops-source.tar.gz');
 const DEPLOY_RECORDS_FILE =
   process.env.DEPLOY_RECORDS_FILE || path.join(DATA_DIR, 'deploy-records.json');
 const DEPLOY_CARDS_FILE =
   process.env.DEPLOY_CARDS_FILE || path.join(DATA_DIR, 'deploy-cards.json');
 const SERVER_AUTHORIZATIONS_FILE =
   process.env.SERVER_AUTHORIZATIONS_FILE || path.join(DATA_DIR, 'server-authorizations.json');
+const SERVER_AUTH_CODES_FILE =
+  process.env.SERVER_AUTH_CODES_FILE || path.join(DATA_DIR, 'server-auth-codes.json');
 const MAX_DEPLOY_RECORDS = Math.max(50, Number(process.env.MAX_DEPLOY_RECORDS || 500) || 500);
 const CARD_RUNNING_TTL_MS = Math.max(600000, Number(process.env.CARD_RUNNING_TTL_MS || 7200000) || 7200000);
 const DEFAULT_DEPLOY_CARD_MAX_USES = Math.max(1, Math.min(50, Number(process.env.DEPLOY_CARD_MAX_USES || 5) || 5));
 const LICENSE_SERVER_URL =
-  String(process.env.LICENSE_SERVER_URL || process.env.PUBLIC_LICENSE_SERVER_URL || 'http://ld.llqq520.xyz').replace(/\/+$/, '');
+  String(process.env.LICENSE_SERVER_URL || process.env.PUBLIC_LICENSE_SERVER_URL || 'http://101.200.36.103:3000').replace(/\/+$/, '');
 const AUTH_GROUP_URL =
   String(process.env.AUTH_GROUP_URL || 'https://qm.qq.com/q/VcaTE1qumQ').trim();
+const OPS_SOURCE_TOKEN =
+  (process.env.OPS_SOURCE_TOKEN || (ADMIN_PASSWORD ? crypto.createHash('sha256').update(`ops-source:${ADMIN_PASSWORD}`).digest('hex') : '')).trim();
+const SOURCE_VERSION = buildSourceVersion();
 const adminSessions = new Map();
 const adminLoginFailures = new Map();
 
@@ -111,6 +119,9 @@ for (const variant of Object.values(PAYLOAD_VARIANTS)) {
 const app = express();
 if (TRUST_PROXY) app.set('trust proxy', true);
 app.use(express.json({ limit: '256kb' }));
+ensureOpsSourcePackage().catch((err) => {
+  console.error('[ops-source] prepare failed:', err.message || err);
+});
 
 app.use((req, res, next) => {
   if (
@@ -129,6 +140,18 @@ app.use((req, res, next) => {
 
 app.get('/admin', (req, res) => {
   res.type('html').send(renderAdminPage());
+});
+
+app.get('/', (req, res) => {
+  res.type('html').send(renderPortalPage());
+});
+
+app.get('/deploy', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'deploy.html'));
+});
+
+app.get('/source', (req, res) => {
+  res.type('html').send(renderSourceDownloadPage());
 });
 
 app.post('/api/admin/login', (req, res) => {
@@ -165,17 +188,28 @@ app.get('/api/admin/summary', requireAdmin, (req, res) => {
     records: loadDeployRecords(),
     cards: publicDeployCards(loadDeployCards()),
     authorizations: publicServerAuthorizations(loadServerAuthorizations()),
+    authCodes: publicServerAuthCodes(loadServerAuthCodes()),
   });
 });
 
 app.post('/api/admin/cards', requireAdmin, (req, res) => {
   const quantity = Math.max(1, Math.min(100, Number(req.body && req.body.quantity) || 1));
+  const maxUses = Math.max(1, Math.min(999, Number(req.body && req.body.maxUses) || DEFAULT_DEPLOY_CARD_MAX_USES));
   const note = String((req.body && req.body.note) || '').trim().slice(0, 120);
-  const cards = createDeployCards(quantity, note);
+  const cards = createDeployCards(quantity, note, maxUses);
   res.json({
     ok: true,
     cards,
   });
+});
+
+app.delete('/api/admin/cards/:id', requireAdmin, (req, res) => {
+  const result = deleteDeployCard(req.params.id);
+  if (!result.ok) {
+    res.status(404).json(result);
+    return;
+  }
+  res.json({ ok: true, cards: publicDeployCards(loadDeployCards()) });
 });
 
 app.post('/api/admin/server-authorizations', requireAdmin, (req, res) => {
@@ -200,11 +234,72 @@ app.delete('/api/admin/server-authorizations/:id', requireAdmin, (req, res) => {
   res.json({ ok: true, authorizations: publicServerAuthorizations(loadServerAuthorizations()) });
 });
 
+app.post('/api/admin/server-auth-codes', requireAdmin, (req, res) => {
+  const result = createServerAuthCodes(req.body || {});
+  if (!result.ok) {
+    res.status(400).json(result);
+    return;
+  }
+  res.json({ ok: true, codes: publicServerAuthCodes(result.codes), authCodes: publicServerAuthCodes(loadServerAuthCodes()) });
+});
+
+app.delete('/api/admin/server-auth-codes/:id', requireAdmin, (req, res) => {
+  const result = deleteServerAuthCode(req.params.id);
+  if (!result.ok) {
+    res.status(404).json(result);
+    return;
+  }
+  res.json({ ok: true, authCodes: publicServerAuthCodes(loadServerAuthCodes()) });
+});
+
 app.options('/api/license/check', (req, res) => {
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.set('Access-Control-Allow-Headers', 'Content-Type');
   res.status(204).end();
+});
+
+app.options('/api/license/redeem', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'POST,OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  res.status(204).end();
+});
+
+app.options('/api/source/version', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  res.status(204).end();
+});
+
+app.get('/api/source/version', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    sourceVersion: SOURCE_VERSION.version,
+    sourceUpdatedAt: SOURCE_VERSION.updatedAt,
+  });
+});
+
+app.get('/api/source/download/:mode', async (req, res) => {
+  try {
+    const mode = String(req.params.mode || '').trim().toLowerCase();
+    if (!['clean', 'card', 'ops'].includes(mode)) {
+      res.status(404).json({ ok: false, message: 'unknown source mode' });
+      return;
+    }
+    if (mode === 'ops' && String(req.query.password || '') !== 'Abc12345') {
+      res.status(403).type('html').send('<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;background:#07111f;color:#eaf4ff;padding:40px">运营版源码下载密码错误</body>');
+      return;
+    }
+    const file = await buildManualSourcePackage(mode);
+    res.set('Cache-Control', 'no-store');
+    res.download(file, path.basename(file));
+  } catch (err) {
+    res.status(500).type('html').send(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;background:#07111f;color:#eaf4ff;padding:40px"><h2>源码打包失败</h2><p>${escapeHtml(err.message || String(err))}</p></body>`);
+  }
 });
 
 app.get('/api/license/check', (req, res) => {
@@ -213,14 +308,34 @@ app.get('/api/license/check', (req, res) => {
   const host = normalizeAuthHost(req.query.host || '');
   const domain = normalizeAuthHost(req.query.domain || '');
   const mode = normalizeAuthMode(req.query.mode || '');
-  const match = findServerAuthorization(host, mode, [domain]);
+  const backendRuntime = isBackendLicenseRuntime(req.query.runtime || req.query.client || '');
+  const remoteHost = normalizeRemoteHost(req);
+  const blocked = backendRuntime
+    ? findBlockedServerAuthorization(remoteHost, mode)
+    : findBlockedServerAuthorization(host, mode, [domain]);
+  if (blocked) {
+    res.json({
+      ok: true,
+      authorized: false,
+      blocked: true,
+      permanent: false,
+      groupUrl: AUTH_GROUP_URL,
+      message: '当前服务器已被后台停止使用，请联系管理员。',
+    });
+    return;
+  }
+  const match = backendRuntime
+    ? findServerAuthorization(remoteHost, mode)
+    : findServerAuthorization(host, mode, [domain]);
   if (!match) {
     res.json({
       ok: true,
       authorized: false,
       permanent: false,
       groupUrl: AUTH_GROUP_URL,
-      message: '当前服务器未授权，已开启 1 天试用；试用结束前请联系管理员授权。',
+      message: backendRuntime
+        ? '当前 Java 后端服务器来源 IP 未授权，请在后台添加该服务器 IP 授权。'
+        : '当前服务器未授权，可免费使用 3 天。',
     });
     return;
   }
@@ -229,9 +344,51 @@ app.get('/api/license/check', (req, res) => {
     authorized: true,
     permanent: !!match.permanent,
     mode: match.mode || 'all',
+    sourceVersion: SOURCE_VERSION.version,
+    sourceUpdatedAt: SOURCE_VERSION.updatedAt,
     groupUrl: AUTH_GROUP_URL,
     message: '服务器授权通过',
   });
+});
+
+app.post('/api/license/redeem', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Cache-Control', 'no-store');
+  const result = redeemServerAuthCode({
+    code: req.body && req.body.code,
+    host: req.body && req.body.host,
+    domain: req.body && req.body.domain,
+    mode: req.body && req.body.mode,
+    remoteHost: normalizeRemoteHost(req),
+  });
+  if (!result.ok) {
+    res.status(400).json({ ok: false, message: result.message });
+    return;
+  }
+  res.json({
+    ok: true,
+    authorized: true,
+    permanent: !!result.authorization.permanent,
+    mode: result.authorization.mode || 'all',
+    expiresAt: result.authorization.expiresAt || '',
+    sourceVersion: SOURCE_VERSION.version,
+    sourceUpdatedAt: SOURCE_VERSION.updatedAt,
+    groupUrl: AUTH_GROUP_URL,
+    message: '授权码兑换成功，服务器已授权',
+  });
+});
+
+app.get('/api/ops-source.tar.gz', (req, res) => {
+  if (!OPS_SOURCE_TOKEN || !safeEqual(String(req.query.token || ''), OPS_SOURCE_TOKEN)) {
+    res.status(403).json({ ok: false, message: 'forbidden' });
+    return;
+  }
+  if (!fs.existsSync(OPS_SOURCE_PACKAGE_FILE)) {
+    res.status(404).json({ ok: false, message: 'ops source package not found' });
+    return;
+  }
+  res.set('Cache-Control', 'no-store');
+  res.download(OPS_SOURCE_PACKAGE_FILE, 'ops-source.tar.gz');
 });
 
 app.use(express.static(path.join(__dirname, 'public'), {
@@ -251,6 +408,26 @@ app.get('/api/health', (req, res) => {
 });
 
 // 前端启动时读取公开元信息
+app.get('/api/deploy-card/check', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const result = checkDeployCard(req.query.code || '');
+  if (!result.ok) {
+    res.status(400).json({ ok: false, message: result.message });
+    return;
+  }
+  const card = publicDeployCards([result.card])[0];
+  res.json({
+    ok: true,
+    card: {
+      status: card.status,
+      maxUses: card.maxUses,
+      usedCount: card.usedCount,
+      remainingUses: card.remainingUses,
+      deployMode: card.deployMode,
+    },
+  });
+});
+
 app.get('/api/meta', (req, res) => {
   res.json({
     accessRequired: false,
@@ -780,6 +957,44 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(av, bv);
 }
 
+function buildSourceVersion() {
+  const targets = [
+    path.resolve(__dirname, '..', '网页源码'),
+    path.resolve(__dirname, '..', '网页前后台'),
+    path.resolve(__dirname, '..', 'APP'),
+    path.resolve(__dirname, '..', 'scripts'),
+  ];
+  const hash = crypto.createHash('sha256');
+  let latest = 0;
+  for (const target of targets) {
+    if (!fs.existsSync(target)) continue;
+    latest = Math.max(latest, hashTree(target, hash));
+  }
+  return {
+    version: hash.digest('hex').slice(0, 16),
+    updatedAt: latest ? new Date(latest).toISOString() : new Date().toISOString(),
+  };
+}
+
+function hashTree(target, hash) {
+  const st = fs.statSync(target);
+  if (st.isDirectory()) {
+    let latest = st.mtimeMs;
+    const names = fs.readdirSync(target).sort();
+    for (const name of names) {
+      if (['.git', 'node_modules', 'build', 'data'].includes(name)) continue;
+      latest = Math.max(latest, hashTree(path.join(target, name), hash));
+    }
+    return latest;
+  }
+  if (!st.isFile()) return st.mtimeMs;
+  const rel = path.relative(path.resolve(__dirname, '..'), target).replace(/\\/g, '/');
+  hash.update(rel);
+  hash.update(String(st.size));
+  hash.update(String(Math.floor(st.mtimeMs)));
+  return st.mtimeMs;
+}
+
 function loadJsonArray(file) {
   try {
     if (!fs.existsSync(file)) return [];
@@ -829,7 +1044,7 @@ function normalizeDeployCard(card) {
     card.maxUses = DEFAULT_DEPLOY_CARD_MAX_USES;
     changed = true;
   } else {
-    card.maxUses = Math.max(1, Math.min(50, Number(card.maxUses)));
+    card.maxUses = Math.max(1, Math.min(999, Number(card.maxUses)));
   }
   if (!Array.isArray(card.uses)) {
     card.uses = [];
@@ -859,9 +1074,10 @@ function getDeployCardStatus(card) {
   return usedCount >= maxUses ? 'used' : 'unused';
 }
 
-function createDeployCards(quantity, note) {
+function createDeployCards(quantity, note, maxUses = DEFAULT_DEPLOY_CARD_MAX_USES) {
   const cards = loadDeployCards();
   const created = [];
+  const cardMaxUses = Math.max(1, Math.min(999, Number(maxUses) || DEFAULT_DEPLOY_CARD_MAX_USES));
   for (let i = 0; i < quantity; i += 1) {
     let code;
     do {
@@ -871,7 +1087,7 @@ function createDeployCards(quantity, note) {
       id: crypto.randomBytes(12).toString('hex'),
       code,
       status: 'unused',
-      maxUses: DEFAULT_DEPLOY_CARD_MAX_USES,
+      maxUses: cardMaxUses,
       usedCount: 0,
       uses: [],
       note: note || '',
@@ -901,6 +1117,18 @@ function publicDeployCards(cards) {
     usedHost: card.usedHost || '',
     deployMode: card.deployMode || '',
   }));
+}
+
+function deleteDeployCard(id) {
+  const value = String(id || '').trim();
+  if (!value) return { ok: false, message: '缺少卡密 ID' };
+  const cards = loadDeployCards();
+  const idx = cards.findIndex((c) => String(c.id || '') === value);
+  if (idx < 0) return { ok: false, message: '卡密不存在或已删除' };
+  if (cards[idx].status === 'running') return { ok: false, message: '卡密正在部署中，暂不能删除' };
+  cards.splice(idx, 1);
+  saveDeployCards(cards);
+  return { ok: true };
 }
 
 function generateDeployCardCode() {
@@ -996,16 +1224,151 @@ function saveServerAuthorizations(rows) {
   saveJsonArray(SERVER_AUTHORIZATIONS_FILE, rows);
 }
 
+function loadServerAuthCodes() {
+  return cleanupServerAuthCodes(loadJsonArray(SERVER_AUTH_CODES_FILE));
+}
+
+function saveServerAuthCodes(rows) {
+  saveJsonArray(SERVER_AUTH_CODES_FILE, rows);
+}
+
+function cleanupServerAuthCodes(rows) {
+  let changed = false;
+  for (const row of rows) {
+    if (!Array.isArray(row.uses)) {
+      row.uses = [];
+      changed = true;
+    }
+    row.maxUses = Math.max(1, Math.min(999, Number(row.maxUses) || 1));
+    row.usedCount = Math.max(Number(row.usedCount) || 0, row.uses.length);
+    row.mode = normalizeAuthMode(row.mode || 'all');
+    row.permanent = !!row.permanent;
+    row.durationYears = Math.max(0, Number(row.durationYears) || 0);
+    row.durationMonths = Math.max(0, Number(row.durationMonths) || 0);
+    row.durationDays = Math.max(0, Number(row.durationDays) || 0);
+  }
+  if (changed) saveServerAuthCodes(rows);
+  return rows;
+}
+
 function publicServerAuthorizations(rows) {
   return rows.map((row) => ({
     id: row.id,
     host: row.host || '',
     mode: row.mode || 'all',
     permanent: !!row.permanent,
+    blocked: !!row.blocked,
+    expiresAt: row.expiresAt || '',
+    expired: isAuthorizationExpired(row),
     note: row.note || '',
     createdAt: row.createdAt || '',
     updatedAt: row.updatedAt || '',
   }));
+}
+
+function publicServerAuthCodes(rows) {
+  return rows.map((row) => ({
+    id: row.id,
+    code: row.code,
+    mode: row.mode || 'all',
+    permanent: !!row.permanent,
+    durationYears: Number(row.durationYears || 0),
+    durationMonths: Number(row.durationMonths || 0),
+    durationDays: Number(row.durationDays || 0),
+    maxUses: Math.max(1, Number(row.maxUses) || 1),
+    usedCount: Math.max(0, Number(row.usedCount) || 0),
+    remainingUses: Math.max(0, (Number(row.maxUses) || 1) - (Number(row.usedCount) || 0)),
+    uses: Array.isArray(row.uses) ? row.uses : [],
+    note: row.note || '',
+    createdAt: row.createdAt || '',
+    usedAt: row.usedAt || '',
+    status: (Number(row.usedCount) || 0) >= (Number(row.maxUses) || 1) ? 'used' : 'unused',
+  }));
+}
+
+function createServerAuthCodes(input) {
+  const quantity = Math.max(1, Math.min(100, Number(input.quantity) || 1));
+  const maxUses = Math.max(1, Math.min(999, Number(input.maxUses) || 1));
+  const mode = normalizeAuthMode(input.mode || 'all');
+  const permanent = !!input.permanent;
+  const duration = normalizeDuration(input);
+  if (!permanent && !durationToExpiresAt(duration)) return { ok: false, message: '非永久授权码请填写年/月/天，至少 1 天' };
+  const note = String(input.note || '').trim().slice(0, 160);
+  const rows = loadServerAuthCodes();
+  const created = [];
+  for (let i = 0; i < quantity; i += 1) {
+    let code;
+    do {
+      code = generateServerAuthCode();
+    } while (rows.some((r) => r.code === code));
+    const row = {
+      id: crypto.randomBytes(12).toString('hex'),
+      code,
+      mode,
+      permanent,
+      durationYears: permanent ? 0 : duration.years,
+      durationMonths: permanent ? 0 : duration.months,
+      durationDays: permanent ? 0 : duration.days,
+      maxUses,
+      usedCount: 0,
+      uses: [],
+      note,
+      createdAt: new Date().toISOString(),
+    };
+    rows.unshift(row);
+    created.push(row);
+  }
+  saveServerAuthCodes(rows);
+  return { ok: true, codes: created };
+}
+
+function deleteServerAuthCode(id) {
+  const value = String(id || '').trim();
+  const rows = loadServerAuthCodes();
+  const next = rows.filter((r) => r.id !== value);
+  if (next.length === rows.length) return { ok: false, message: '授权码不存在或已删除' };
+  saveServerAuthCodes(next);
+  return { ok: true };
+}
+
+function generateServerAuthCode() {
+  const a = crypto.randomBytes(3).toString('hex').toUpperCase();
+  const b = crypto.randomBytes(3).toString('hex').toUpperCase();
+  const c = crypto.randomBytes(2).toString('hex').toUpperCase();
+  return `AUTH-${a}-${b}-${c}`;
+}
+
+function redeemServerAuthCode(input) {
+  const codeValue = String(input.code || '').trim().toUpperCase();
+  if (!codeValue) return { ok: false, message: '请输入授权码' };
+  const host = normalizeAuthHost(input.host || input.domain || input.remoteHost || '');
+  const domain = normalizeAuthHost(input.domain || '');
+  const remoteHost = normalizeAuthHost(input.remoteHost || '');
+  const targetHost = host || domain || remoteHost;
+  if (!targetHost) return { ok: false, message: '无法识别当前服务器地址' };
+  if (!isValidAuthHost(targetHost)) return { ok: false, message: '当前服务器地址格式不合法' };
+  const rows = loadServerAuthCodes();
+  const row = rows.find((r) => String(r.code || '').toUpperCase() === codeValue);
+  if (!row) return { ok: false, message: '授权码不存在' };
+  cleanupServerAuthCodes(rows);
+  if ((Number(row.usedCount) || 0) >= (Number(row.maxUses) || 1)) return { ok: false, message: '授权码次数已用完' };
+  const mode = normalizeAuthMode(row.mode || input.mode || 'all');
+  const expiresAt = row.permanent ? '' : durationToExpiresAt(row);
+  if (!row.permanent && !expiresAt) return { ok: false, message: '授权码时长无效，请联系管理员重新生成' };
+  const result = upsertServerAuthorization({
+    host: targetHost,
+    mode,
+    permanent: !!row.permanent,
+    expiresAt,
+    note: `授权码兑换 ${row.code}${row.note ? ` - ${row.note}` : ''}`,
+  });
+  if (!result.ok) return result;
+  const now = new Date().toISOString();
+  row.usedCount = Math.min(Number(row.maxUses) || 1, (Number(row.usedCount) || 0) + 1);
+  row.usedAt = now;
+  row.uses.push({ host: targetHost, domain, remoteHost, mode, usedAt: now, authorizationId: result.authorization.id });
+  saveServerAuthCodes(rows);
+  return { ok: true, authorization: result.authorization, code: row };
 }
 
 function upsertServerAuthorization(input) {
@@ -1014,6 +1377,8 @@ function upsertServerAuthorization(input) {
   if (!isValidAuthHost(host)) return { ok: false, message: '授权 IP/域名格式不合法' };
   const mode = normalizeAuthMode(input.mode || 'all');
   const permanent = !!input.permanent;
+  const expiresAt = permanent ? '' : (normalizeExpiresAt(input.expiresAt || input.expireAt || '') || durationToExpiresAt(input));
+  if (!permanent && !expiresAt) return { ok: false, message: '非永久授权必须填写到期时间' };
   const note = String(input.note || '').trim().slice(0, 160);
   const rows = loadServerAuthorizations();
   const now = new Date().toISOString();
@@ -1021,6 +1386,8 @@ function upsertServerAuthorization(input) {
   if (row) {
     row.mode = mode;
     row.permanent = permanent;
+    row.blocked = false;
+    row.expiresAt = expiresAt;
     row.note = note;
     row.updatedAt = now;
   } else {
@@ -1029,6 +1396,8 @@ function upsertServerAuthorization(input) {
       host,
       mode,
       permanent,
+      blocked: false,
+      expiresAt,
       note,
       createdAt: now,
       updatedAt: now,
@@ -1042,9 +1411,14 @@ function upsertServerAuthorization(input) {
 function deleteServerAuthorization(id) {
   const value = String(id || '').trim();
   const rows = loadServerAuthorizations();
-  const next = rows.filter((r) => r.id !== value);
-  if (next.length === rows.length) return { ok: false, message: '授权记录不存在' };
-  saveServerAuthorizations(next);
+  const row = rows.find((r) => r.id === value);
+  if (!row) return { ok: false, message: '授权记录不存在' };
+  row.blocked = true;
+  row.permanent = false;
+  row.expiresAt = new Date(Date.now() - 1000).toISOString();
+  row.updatedAt = new Date().toISOString();
+  row.note = row.note ? `${row.note}（已停止）` : '已停止';
+  saveServerAuthorizations(rows);
   return { ok: true };
 }
 
@@ -1053,6 +1427,21 @@ function findServerAuthorization(host, mode, aliases = []) {
   if (!candidates.length) return null;
   const currentMode = normalizeAuthMode(mode || 'all');
   return loadServerAuthorizations().find((row) => {
+    if (row.blocked) return false;
+    if (isAuthorizationExpired(row)) return false;
+    const rowHost = normalizeAuthHost(row.host);
+    if (!rowHost || !candidates.includes(rowHost)) return false;
+    const rowMode = normalizeAuthMode(row.mode || 'all');
+    return rowMode === 'all' || currentMode === 'all' || rowMode === currentMode;
+  }) || null;
+}
+
+function findBlockedServerAuthorization(host, mode, aliases = []) {
+  const candidates = [host, ...aliases].map(normalizeAuthHost).filter(Boolean);
+  if (!candidates.length) return null;
+  const currentMode = normalizeAuthMode(mode || 'all');
+  return loadServerAuthorizations().find((row) => {
+    if (!row.blocked) return false;
     const rowHost = normalizeAuthHost(row.host);
     if (!rowHost || !candidates.includes(rowHost)) return false;
     const rowMode = normalizeAuthMode(row.mode || 'all');
@@ -1062,6 +1451,50 @@ function findServerAuthorization(host, mode, aliases = []) {
 
 function normalizeAuthHost(value) {
   return String(value || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
+}
+
+function normalizeExpiresAt(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const date = new Date(raw);
+  if (!Number.isFinite(date.getTime())) return '';
+  if (date.getTime() <= Date.now()) return '';
+  return date.toISOString();
+}
+
+function normalizeDuration(input) {
+  return {
+    years: Math.max(0, Math.min(50, Number(input.durationYears || input.years || 0) || 0)),
+    months: Math.max(0, Math.min(600, Number(input.durationMonths || input.months || 0) || 0)),
+    days: Math.max(0, Math.min(36500, Number(input.durationDays || input.days || 0) || 0)),
+  };
+}
+
+function durationToExpiresAt(input) {
+  const d = normalizeDuration(input || {});
+  if (!d.years && !d.months && !d.days) return '';
+  const date = new Date();
+  date.setFullYear(date.getFullYear() + d.years);
+  date.setMonth(date.getMonth() + d.months);
+  date.setDate(date.getDate() + d.days);
+  if (!Number.isFinite(date.getTime()) || date.getTime() <= Date.now()) return '';
+  return date.toISOString();
+}
+
+function isAuthorizationExpired(row) {
+  if (!row || row.permanent) return false;
+  if (!row.expiresAt) return true;
+  const time = new Date(row.expiresAt).getTime();
+  return !Number.isFinite(time) || time <= Date.now();
+}
+
+function normalizeRemoteHost(req) {
+  const raw = String((req && req.socket && req.socket.remoteAddress) || req.ip || '').trim();
+  return normalizeAuthHost(raw.replace(/^::ffff:/, '').replace(/^\[|\]$/g, ''));
+}
+
+function isBackendLicenseRuntime(value) {
+  return /^(java|jar|backend|server)$/i.test(String(value || '').trim());
 }
 
 function normalizeAuthMode(value) {
@@ -1083,6 +1516,7 @@ function buildLicenseConfigForTarget(creds) {
     serverUrl: LICENSE_SERVER_URL,
     host: normalizeAuthHost(creds.host),
     mode: normalizeAuthMode(creds.deployMode),
+    sourceVersion: SOURCE_VERSION.version,
     authorized: !!matched,
     permanent: !!(matched && matched.permanent),
     groupUrl: AUTH_GROUP_URL,
@@ -1207,21 +1641,25 @@ function renderAdminPage() {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>部署后台</title>
   <style>
-    *{box-sizing:border-box}body{margin:0;background:#0b1020;color:#e8eefc;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
-    .wrap{max-width:1320px;margin:0 auto;padding:28px 18px 48px}.top{display:flex;gap:16px;align-items:flex-end;justify-content:space-between;margin-bottom:18px}
-    h1{margin:0;font-size:26px;letter-spacing:0}.muted{color:#93a4bd;font-size:13px}.hidden{display:none!important}
-    .panel{background:#111a2e;border:1px solid #22304c;border-radius:8px;padding:14px;margin-bottom:14px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-    input,select{height:38px;min-width:180px;border:1px solid #314568;background:#070b16;color:#e8eefc;border-radius:6px;padding:0 12px}
-    input[type=number]{min-width:90px}.check{min-width:auto;height:auto}button,a.btn{height:38px;border:0;border-radius:6px;background:#38bdf8;color:#06111f;font-weight:700;padding:0 14px;cursor:pointer;display:inline-flex;align-items:center;text-decoration:none}
-    .ghost{background:#1e293b!important;color:#d8e5f8!important}.danger{background:#ef4444!important;color:white!important}.status{min-height:20px;margin-top:8px;color:#fbbf24;font-size:13px}
-    .stats{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;margin:12px 0}.stat{background:#0f172a;border:1px solid #22304c;border-radius:8px;padding:12px}.stat strong{display:block;font-size:22px;color:#bae6fd}
-    .table-wrap{overflow:auto;border:1px solid #22304c;border-radius:8px;background:#0f172a;margin-top:10px}table{width:100%;border-collapse:collapse;min-width:1180px}
-    th,td{padding:10px 12px;border-bottom:1px solid #22304c;text-align:left;vertical-align:top;font-size:13px}th{position:sticky;top:0;background:#16233a;color:#bfdbfe;z-index:1}
-    code{color:#bae6fd;word-break:break-all}.secret{color:#fef3c7}.empty{padding:34px;text-align:center;color:#93a4bd}.note{max-width:260px;color:#a7b6ce;line-height:1.5}
+    *{box-sizing:border-box}body{margin:0;background:#07100f;color:#ecf5ff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+    body:before{content:"";position:fixed;inset:0;z-index:-1;background:linear-gradient(135deg,rgba(12,39,35,.94),rgba(8,13,22,.98) 56%,rgba(27,21,40,.94)),radial-gradient(circle at 12% 0%,rgba(45,212,191,.22),transparent 32%),radial-gradient(circle at 90% 10%,rgba(248,181,71,.14),transparent 30%)}
+    .wrap{max-width:1440px;margin:0 auto;padding:24px 20px 48px}.top{display:flex;gap:16px;align-items:center;justify-content:space-between;margin-bottom:16px;padding:14px 0;border-bottom:1px solid rgba(148,163,184,.16)}
+    h1{margin:0;font-size:24px;letter-spacing:0}.muted{color:#9fb2c9;font-size:13px}.hidden{display:none!important}
+    .panel{position:relative;background:rgba(10,20,28,.78);border:1px solid rgba(148,163,184,.16);border-radius:8px;padding:16px;margin-bottom:14px;box-shadow:0 18px 50px rgba(0,0,0,.26)}.panel:before{content:"";position:absolute;left:0;right:0;top:0;height:2px;background:linear-gradient(90deg,#2dd4bf,#f8b547,#60a5fa);border-radius:8px 8px 0 0}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    input,select{height:38px;min-width:180px;border:1px solid rgba(148,163,184,.2);background:rgba(2,8,12,.55);color:#ecf5ff;border-radius:7px;padding:0 12px;outline:none}input:focus,select:focus{border-color:#2dd4bf;box-shadow:0 0 0 3px rgba(45,212,191,.14)}
+    input[type=number]{min-width:90px}.duration-input{width:84px;min-width:72px}.check{min-width:auto;height:auto}button,a.btn{height:38px;border:0;border-radius:7px;background:linear-gradient(135deg,#2dd4bf,#60a5fa);color:#041016;font-weight:800;padding:0 14px;cursor:pointer;display:inline-flex;align-items:center;text-decoration:none}
+    .ghost{background:#182438!important;color:#d8e5f8!important;border:1px solid rgba(148,163,184,.18)!important}.danger{background:#ef4444!important;color:white!important}.status{min-height:20px;margin-top:8px;color:#f8b547;font-size:13px}
+    .stats{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;margin:12px 0}.stat{background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);border-radius:8px;padding:14px}.stat strong{display:block;font-size:24px;color:#67e8f9}
+    .table-wrap{overflow:auto;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:rgba(8,16,24,.78);margin-top:10px}table{width:100%;border-collapse:collapse;min-width:1180px}
+    th,td{padding:10px 12px;border-bottom:1px solid rgba(148,163,184,.13);text-align:left;vertical-align:top;font-size:13px}th{position:sticky;top:0;background:#102034;color:#bfdbfe;z-index:1}
+    code{color:#bae6fd;word-break:break-all}.secret{color:#fef3c7}.empty{padding:34px;text-align:center;color:#9fb2c9}.note{max-width:260px;color:#a7b6ce;line-height:1.5}
     .copy{height:28px;padding:0 10px;font-size:12px}.section-title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:18px}.section-title h2{font-size:18px;margin:0}
     .filters{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:10px;margin:10px 0}.filters input,.filters select{width:100%}
-    .new-cards{white-space:pre-wrap;line-height:1.7;background:#07111f;border:1px solid #22304c;border-radius:8px;padding:12px;color:#dbeafe;max-height:220px;overflow:auto}
-    @media(max-width:760px){.top{align-items:flex-start;flex-direction:column}.stats{grid-template-columns:1fr 1fr}table{min-width:980px}}
+    .new-cards{white-space:pre-wrap;line-height:1.7;background:rgba(2,8,12,.56);border:1px solid rgba(148,163,184,.16);border-radius:8px;padding:12px;color:#dbeafe;max-height:220px;overflow:auto}
+    .admin-shell{display:grid;grid-template-columns:220px minmax(0,1fr);gap:14px;align-items:start}.admin-nav{position:sticky;top:16px;background:rgba(8,16,24,.8);border:1px solid rgba(148,163,184,.16);border-radius:8px;padding:10px;box-shadow:0 18px 50px rgba(0,0,0,.22)}.admin-nav-title{padding:8px 10px 12px;color:#9fb2c9;font-size:12px}.nav-btn{width:100%;justify-content:flex-start;margin-bottom:8px;background:transparent!important;color:#d8e5f8!important;border:1px solid rgba(148,163,184,.14)!important}.nav-btn.active{background:linear-gradient(135deg,#2dd4bf,#60a5fa)!important;color:#041016!important;border-color:transparent!important}.admin-view.hidden-view{display:none!important}
+    #loginPanel{max-width:460px;margin:78px auto 0;padding:22px}#loginPanel .row{display:grid;grid-template-columns:1fr;gap:9px}#loginPanel input,#loginPanel button{width:100%;height:44px}#loginPanel label{color:#9fb2c9;font-size:13px}
+    @media(max-width:900px){.admin-shell{grid-template-columns:1fr}.admin-nav{position:static;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.admin-nav-title{grid-column:1/-1}.nav-btn{margin:0}}
+    @media(max-width:760px){.top{align-items:flex-start;flex-direction:column}.stats{grid-template-columns:1fr 1fr}.filters{grid-template-columns:1fr}table{min-width:980px}}
   </style>
 </head>
 <body>
@@ -1249,15 +1687,25 @@ function renderAdminPage() {
       <div class="status" id="status"></div>
     </section>
 
-    <section id="adminPanel" class="hidden">
-      <div class="stats">
-        <div class="stat"><span class="muted">部署记录</span><strong id="recordCount">0</strong></div>
-        <div class="stat"><span class="muted">未使用卡密</span><strong id="unusedCount">0</strong></div>
-        <div class="stat"><span class="muted">已使用卡密</span><strong id="usedCount">0</strong></div>
-        <div class="stat"><span class="muted">进行中</span><strong id="runningCount">0</strong></div>
+    <section id="adminPanel" class="hidden admin-shell">
+      <aside class="admin-nav">
+        <div class="admin-nav-title">管理分栏</div>
+        <button class="nav-btn active" type="button" data-admin-tab="overview">概览</button>
+        <button class="nav-btn" type="button" data-admin-tab="cards">卡密列表</button>
+        <button class="nav-btn" type="button" data-admin-tab="auth">服务器授权管理</button>
+        <button class="nav-btn" type="button" data-admin-tab="records">已部署服务器信息</button>
+      </aside>
+      <div class="admin-content">
+      <div class="admin-view" data-admin-view="overview">
+        <div class="stats">
+          <div class="stat"><span class="muted">部署记录</span><strong id="recordCount">0</strong></div>
+          <div class="stat"><span class="muted">未使用卡密</span><strong id="unusedCount">0</strong></div>
+          <div class="stat"><span class="muted">已使用卡密</span><strong id="usedCount">0</strong></div>
+          <div class="stat"><span class="muted">进行中</span><strong id="runningCount">0</strong></div>
+        </div>
       </div>
 
-      <section class="panel">
+      <section class="panel admin-view hidden-view" data-admin-view="cards">
         <div class="section-title">
           <h2>生成部署卡密</h2>
           <button class="ghost" id="copyNewCards">复制新卡密</button>
@@ -1265,6 +1713,8 @@ function renderAdminPage() {
         <form class="row" id="cardForm">
           <label for="cardQty">数量</label>
           <input id="cardQty" type="number" min="1" max="100" value="1">
+          <label for="cardMaxUses">使用上限</label>
+          <input id="cardMaxUses" type="number" min="1" max="999" value="${DEFAULT_DEPLOY_CARD_MAX_USES}">
           <label for="cardNote">备注</label>
           <input id="cardNote" placeholder="客户/用途，可留空">
           <button type="submit">生成卡密</button>
@@ -1273,7 +1723,7 @@ function renderAdminPage() {
         <pre class="new-cards hidden" id="newCards"></pre>
       </section>
 
-      <section>
+      <section class="admin-view hidden-view" data-admin-view="cards">
         <div class="section-title">
           <h2>卡密列表</h2>
           <span class="muted">成功部署后自动失效</span>
@@ -1286,7 +1736,7 @@ function renderAdminPage() {
         <div class="table-wrap" id="cards"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel admin-view hidden-view" data-admin-view="auth">
         <div class="section-title">
           <h2>服务器授权管理</h2>
           <span class="muted">未授权服务器部署完成后可试用 1 天，页面会提示联系授权</span>
@@ -1302,19 +1752,53 @@ function renderAdminPage() {
             <option value="ops">运营版</option>
           </select>
           <label><input class="check" id="authPermanent" type="checkbox"> 永久授权</label>
+          <label for="authYears">授权时长</label>
+          <input class="duration-input" id="authYears" type="number" min="0" max="50" value="0" placeholder="年" title="授权年数">
+          <input class="duration-input" id="authMonths" type="number" min="0" max="600" value="0" placeholder="月" title="授权月数">
+          <input class="duration-input" id="authDays" type="number" min="0" max="36500" value="1" placeholder="天" title="授权天数">
           <input id="authNote" placeholder="客户/备注，可留空">
           <button type="submit">添加/更新授权</button>
         </form>
         <div class="status" id="authStatus"></div>
+        <div class="section-title">
+          <h2>生成授权码</h2>
+          <button class="ghost" id="copyNewAuthCodes">复制新授权码</button>
+        </div>
+        <form class="row" id="authCodeForm">
+          <label for="authCodeQty">数量</label>
+          <input class="duration-input" id="authCodeQty" type="number" min="1" max="100" value="1">
+          <label for="authCodeMode">版本</label>
+          <select id="authCodeMode">
+            <option value="all">全部版本</option>
+            <option value="clean">纯净版</option>
+            <option value="card">卡密版</option>
+            <option value="ops">运营版</option>
+          </select>
+          <label><input class="check" id="authCodePermanent" type="checkbox"> 永久授权</label>
+          <label for="authCodeYears">时长</label>
+          <input class="duration-input" id="authCodeYears" type="number" min="0" max="50" value="0" placeholder="年" title="授权年数">
+          <input class="duration-input" id="authCodeMonths" type="number" min="0" max="600" value="0" placeholder="月" title="授权月数">
+          <input class="duration-input" id="authCodeDays" type="number" min="0" max="36500" value="1" placeholder="天" title="授权天数">
+          <label for="authCodeMaxUses">可用次数</label>
+          <input class="duration-input" id="authCodeMaxUses" type="number" min="1" max="999" value="1">
+          <input id="authCodeNote" placeholder="客户/备注，可留空">
+          <button type="submit">生成授权码</button>
+        </form>
+        <pre class="new-cards hidden" id="newAuthCodes"></pre>
         <div class="filters">
           <div><label>授权版本</label><select id="authListModeFilter"><option value="all">全部版本</option><option value="clean">纯净版</option><option value="card">卡密版</option><option value="ops">运营版</option></select></div>
-          <div><label>授权类型</label><select id="authTypeFilter"><option value="all">全部</option><option value="permanent">永久授权</option><option value="online">在线授权</option></select></div>
+          <div><label>授权类型</label><select id="authTypeFilter"><option value="all">全部</option><option value="permanent">永久授权</option><option value="online">限时授权</option><option value="expired">已过期</option></select></div>
           <div style="grid-column:span 2"><label>搜索 IP/域名 / 备注</label><input id="authSearch" placeholder="输入关键词"></div>
         </div>
         <div class="table-wrap" id="authorizations"></div>
+        <div class="section-title">
+          <h2>授权码列表</h2>
+          <span class="muted">用户在未授权页面输入后自动绑定当前服务器</span>
+        </div>
+        <div class="table-wrap" id="authCodes"></div>
       </section>
 
-      <section>
+      <section class="admin-view hidden-view" data-admin-view="records">
         <div class="section-title">
           <h2>已部署服务器信息</h2>
           <button class="ghost" id="copyAll">复制全部部署记录</button>
@@ -1325,6 +1809,7 @@ function renderAdminPage() {
         </div>
         <div class="table-wrap" id="records"></div>
       </section>
+      </div>
     </section>
   </main>
   <script>
@@ -1338,6 +1823,7 @@ function renderAdminPage() {
       status: document.getElementById('status'),
       cardForm: document.getElementById('cardForm'),
       cardQty: document.getElementById('cardQty'),
+      cardMaxUses: document.getElementById('cardMaxUses'),
       cardNote: document.getElementById('cardNote'),
       cardStatus: document.getElementById('cardStatus'),
       newCards: document.getElementById('newCards'),
@@ -1349,7 +1835,22 @@ function renderAdminPage() {
       authHost: document.getElementById('authHost'),
       authMode: document.getElementById('authMode'),
       authPermanent: document.getElementById('authPermanent'),
+      authYears: document.getElementById('authYears'),
+      authMonths: document.getElementById('authMonths'),
+      authDays: document.getElementById('authDays'),
       authNote: document.getElementById('authNote'),
+      authCodeForm: document.getElementById('authCodeForm'),
+      authCodeQty: document.getElementById('authCodeQty'),
+      authCodeMode: document.getElementById('authCodeMode'),
+      authCodePermanent: document.getElementById('authCodePermanent'),
+      authCodeYears: document.getElementById('authCodeYears'),
+      authCodeMonths: document.getElementById('authCodeMonths'),
+      authCodeDays: document.getElementById('authCodeDays'),
+      authCodeMaxUses: document.getElementById('authCodeMaxUses'),
+      authCodeNote: document.getElementById('authCodeNote'),
+      newAuthCodes: document.getElementById('newAuthCodes'),
+      copyNewAuthCodes: document.getElementById('copyNewAuthCodes'),
+      authCodes: document.getElementById('authCodes'),
       authStatus: document.getElementById('authStatus'),
       authorizations: document.getElementById('authorizations'),
       authListModeFilter: document.getElementById('authListModeFilter'),
@@ -1370,7 +1871,9 @@ function renderAdminPage() {
     let latestRecords = [];
     let latestCards = [];
     let latestAuthorizations = [];
+    let latestAuthCodes = [];
     let latestNewCards = [];
+    let latestNewAuthCodes = [];
     let latestFilteredRecords = [];
     let token = sessionStorage.getItem('radar.adminToken') || '';
     function esc(v){return String(v ?? '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
@@ -1378,6 +1881,41 @@ function renderAdminPage() {
     function secret(v){return v ? '<code class="secret">'+esc(v)+'</code>' : '<span class="muted">-</span>';}
     function fmtTime(v){try{return new Date(v).toLocaleString('zh-CN',{hour12:false});}catch(_){return v || '';}}
     function authHeaders(){return {'content-type':'application/json','x-admin-token':token};}
+    function authDuration(){
+      return {
+        years: Math.max(0, Number(els.authYears.value || 0) || 0),
+        months: Math.max(0, Number(els.authMonths.value || 0) || 0),
+        days: Math.max(0, Number(els.authDays.value || 0) || 0),
+      };
+    }
+    function buildAuthExpiresAt(){
+      const d = authDuration();
+      if (!d.years && !d.months && !d.days) return '';
+      const date = new Date();
+      date.setFullYear(date.getFullYear() + d.years);
+      date.setMonth(date.getMonth() + d.months);
+      date.setDate(date.getDate() + d.days);
+      return date.toISOString();
+    }
+    function syncAuthDurationInputs(){
+      const disabled = els.authPermanent.checked;
+      [els.authYears, els.authMonths, els.authDays].forEach(input => {
+        if (input) input.disabled = disabled;
+      });
+    }
+    function authCodeDuration(){
+      return {
+        years: Math.max(0, Number(els.authCodeYears.value || 0) || 0),
+        months: Math.max(0, Number(els.authCodeMonths.value || 0) || 0),
+        days: Math.max(0, Number(els.authCodeDays.value || 0) || 0),
+      };
+    }
+    function syncAuthCodeDurationInputs(){
+      const disabled = els.authCodePermanent.checked;
+      [els.authCodeYears, els.authCodeMonths, els.authCodeDays].forEach(input => {
+        if (input) input.disabled = disabled;
+      });
+    }
     function showAuthed(ok){
       els.loginPanel.classList.toggle('hidden', ok);
       els.adminPanel.classList.toggle('hidden', !ok);
@@ -1423,6 +1961,7 @@ function renderAdminPage() {
       latestRecords = data.records || [];
       latestCards = data.cards || [];
       latestAuthorizations = data.authorizations || [];
+      latestAuthCodes = data.authCodes || [];
       renderFilteredTables();
       renderStats();
     }
@@ -1431,7 +1970,7 @@ function renderAdminPage() {
       const res = await fetch('/api/admin/cards', {
         method:'POST',
         headers:authHeaders(),
-        body: JSON.stringify({quantity: Number(els.cardQty.value || 1), note: els.cardNote.value.trim()})
+        body: JSON.stringify({quantity: Number(els.cardQty.value || 1), maxUses: Number(els.cardMaxUses.value || ${DEFAULT_DEPLOY_CARD_MAX_USES}), note: els.cardNote.value.trim()})
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {
@@ -1446,6 +1985,12 @@ function renderAdminPage() {
     }
     async function saveAuthorization(){
       els.authStatus.textContent = '正在保存授权...';
+      const duration = authDuration();
+      const expiresAt = els.authPermanent.checked ? '' : buildAuthExpiresAt();
+      if (!els.authPermanent.checked && !expiresAt) {
+        els.authStatus.textContent = '非永久授权请填写年/月/天，至少 1 天';
+        return;
+      }
       const res = await fetch('/api/admin/server-authorizations', {
         method:'POST',
         headers:authHeaders(),
@@ -1453,6 +1998,10 @@ function renderAdminPage() {
           host: els.authHost.value.trim(),
           mode: els.authMode.value,
           permanent: els.authPermanent.checked,
+          expiresAt,
+          durationYears: duration.years,
+          durationMonths: duration.months,
+          durationDays: duration.days,
           note: els.authNote.value.trim()
         })
       });
@@ -1464,10 +2013,44 @@ function renderAdminPage() {
       els.authStatus.textContent = '授权已保存';
       els.authHost.value = '';
       els.authNote.value = '';
+      els.authYears.value = '0';
+      els.authMonths.value = '0';
+      els.authDays.value = '1';
       els.authPermanent.checked = false;
       await loadSummary();
     }
-    async function deleteAuthorization(id){
+    async function createAuthCodes(){
+      const duration = authCodeDuration();
+      if (!els.authCodePermanent.checked && !duration.years && !duration.months && !duration.days) {
+        els.authStatus.textContent = '生成非永久授权码请填写年/月/天，至少 1 天';
+        return;
+      }
+      els.authStatus.textContent = '正在生成授权码...';
+      const res = await fetch('/api/admin/server-auth-codes', {
+        method:'POST',
+        headers:authHeaders(),
+        body: JSON.stringify({
+          quantity: Number(els.authCodeQty.value || 1),
+          mode: els.authCodeMode.value,
+          permanent: els.authCodePermanent.checked,
+          durationYears: duration.years,
+          durationMonths: duration.months,
+          durationDays: duration.days,
+          maxUses: Number(els.authCodeMaxUses.value || 1),
+          note: els.authCodeNote.value.trim()
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        els.authStatus.textContent = data.message || '生成授权码失败';
+        return;
+      }
+      latestNewAuthCodes = data.codes || [];
+      els.newAuthCodes.textContent = latestNewAuthCodes.map(c => c.code).join('\n');
+      els.newAuthCodes.classList.toggle('hidden', !latestNewAuthCodes.length);
+      els.authStatus.textContent = '已生成 ' + latestNewAuthCodes.length + ' 个授权码';
+      await loadSummary();
+    }    async function deleteAuthorization(id){
       if (!confirm('确定取消这个服务器授权吗？取消后普通授权目标刷新页面会提示需要授权。')) return;
       const res = await fetch('/api/admin/server-authorizations/' + encodeURIComponent(id), {
         method:'DELETE',
@@ -1479,6 +2062,35 @@ function renderAdminPage() {
         return;
       }
       els.authStatus.textContent = '已取消授权';
+      await loadSummary();
+    }
+    async function deleteAuthCode(id){
+      if (!confirm('确定删除这个授权码吗？删除后不能恢复。')) return;
+      els.authStatus.textContent = '正在删除授权码...';
+      const res = await fetch('/api/admin/server-auth-codes/' + encodeURIComponent(id), {
+        method:'DELETE',
+        headers:authHeaders()
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        els.authStatus.textContent = data.message || '删除授权码失败';
+        return;
+      }
+      els.authStatus.textContent = '授权码已删除';
+      await loadSummary();
+    }    async function deleteCard(id){
+      if (!confirm('确定删除这张部署卡密吗？删除后不能恢复。')) return;
+      els.cardStatus.textContent = '正在删除卡密...';
+      const res = await fetch('/api/admin/cards/' + encodeURIComponent(id), {
+        method:'DELETE',
+        headers:authHeaders()
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        els.cardStatus.textContent = data.message || '删除卡密失败';
+        return;
+      }
+      els.cardStatus.textContent = '卡密已删除';
       await loadSummary();
     }
     function norm(v){return String(v || '').toLowerCase();}
@@ -1494,6 +2106,7 @@ function renderAdminPage() {
       latestFilteredRecords = filterRecords(latestRecords);
       renderCards(filterCards(latestCards));
       renderAuthorizations(filterAuthorizations(latestAuthorizations));
+      renderAuthCodes(latestAuthCodes);
       renderRecords(latestFilteredRecords);
     }
     function filterCards(rows){
@@ -1515,6 +2128,8 @@ function renderAdminPage() {
         if (mode !== 'all' && (r.mode || 'all') !== mode) return false;
         if (type === 'permanent' && !r.permanent) return false;
         if (type === 'online' && r.permanent) return false;
+        if (type === 'online' && r.expired) return false;
+        if (type === 'expired' && !r.expired) return false;
         if (q && !norm([r.host, r.note, r.mode].join(' ')).includes(q)) return false;
         return true;
       });
@@ -1550,7 +2165,7 @@ function renderAdminPage() {
           '<td>'+esc(fmtTime(c.createdAt))+'</td>' +
           '<td>'+esc(fmtTime(c.usedAt || c.lockedAt || ''))+'</td>' +
           '<td>'+esc(c.deployMode || '')+'</td>' +
-          '<td><button class="copy" data-card-code="'+esc(c.code || '')+'">复制</button></td>' +
+          '<td><button class="copy" data-card-code="'+esc(c.code || '')+'">复制</button> <button class="copy danger" data-card-delete="'+esc(c.id || '')+'">删除</button></td>' +
         '</tr>').join('') + '</tbody></table>';
     }
     function renderAuthorizations(rows){
@@ -1559,14 +2174,41 @@ function renderAdminPage() {
         return;
       }
       const modeText = {all:'全部版本', clean:'纯净版', card:'卡密版', ops:'运营版'};
-      els.authorizations.innerHTML = '<table><thead><tr><th>IP/域名</th><th>版本</th><th>授权类型</th><th>备注</th><th>更新时间</th><th>操作</th></tr></thead><tbody>' +
+      els.authorizations.innerHTML = '<table><thead><tr><th>IP/域名</th><th>版本</th><th>授权类型</th><th>到期时间</th><th>备注</th><th>更新时间</th><th>操作</th></tr></thead><tbody>' +
         rows.map((r) => '<tr>' +
           '<td>'+value(r.host)+'</td>' +
           '<td>'+esc(modeText[r.mode] || r.mode || '全部版本')+'</td>' +
-          '<td>'+esc(r.permanent ? '永久授权' : '在线授权')+'</td>' +
+          '<td>'+esc(r.permanent ? '永久授权' : (r.expired ? '已过期' : '限时授权'))+'</td>' +
+          '<td>'+esc(r.permanent ? '永久' : fmtTime(r.expiresAt || ''))+'</td>' +
           '<td>'+esc(r.note || '')+'</td>' +
           '<td>'+esc(fmtTime(r.updatedAt || r.createdAt))+'</td>' +
           '<td><button class="copy danger" data-auth-delete="'+esc(r.id)+'">取消授权</button></td>' +
+        '</tr>').join('') + '</tbody></table>';
+    }
+    function durationText(row){
+      if (row.permanent) return '永久';
+      const parts = [];
+      if (Number(row.durationYears || 0)) parts.push(Number(row.durationYears) + '年');
+      if (Number(row.durationMonths || 0)) parts.push(Number(row.durationMonths) + '月');
+      if (Number(row.durationDays || 0)) parts.push(Number(row.durationDays) + '天');
+      return parts.join(' ') || '-';
+    }
+    function renderAuthCodes(rows){
+      if (!rows.length) {
+        els.authCodes.innerHTML = '<div class="empty">暂无授权码</div>';
+        return;
+      }
+      const modeText = {all:'全部版本', clean:'纯净版', card:'卡密版', ops:'运营版'};
+      els.authCodes.innerHTML = '<table><thead><tr><th>授权码</th><th>版本</th><th>时长</th><th>次数</th><th>备注</th><th>生成时间</th><th>最近使用</th><th>操作</th></tr></thead><tbody>' +
+        rows.map((r) => '<tr>' +
+          '<td>'+secret(r.code)+'</td>' +
+          '<td>'+esc(modeText[r.mode] || r.mode || '全部版本')+'</td>' +
+          '<td>'+esc(durationText(r))+'</td>' +
+          '<td>'+esc(Number(r.usedCount || 0))+' / '+esc(Number(r.maxUses || 1))+'<br><span class="muted">剩余 '+esc(Number(r.remainingUses || 0))+'</span></td>' +
+          '<td>'+esc(r.note || '')+'</td>' +
+          '<td>'+esc(fmtTime(r.createdAt))+'</td>' +
+          '<td>'+esc(fmtTime(r.usedAt || ''))+'</td>' +
+          '<td><button class="copy" data-auth-code="'+esc(r.code || '')+'">复制</button> <button class="copy danger" data-auth-code-delete="'+esc(r.id || '')+'">删除</button></td>' +
         '</tr>').join('') + '</tbody></table>';
     }
     function renderRecords(records){
@@ -1617,8 +2259,25 @@ function renderAdminPage() {
       const recordBtn = e.target.closest('[data-record-id],[data-copy]');
       const cardBtn = e.target.closest('[data-card-code],[data-card]');
       const authDeleteBtn = e.target.closest('[data-auth-delete]');
+      const cardDeleteBtn = e.target.closest('[data-card-delete]');
+      const authCodeBtn = e.target.closest('[data-auth-code]');
+      const authCodeDeleteBtn = e.target.closest('[data-auth-code-delete]');
       if (authDeleteBtn) {
         deleteAuthorization(authDeleteBtn.dataset.authDelete).catch(err => els.authStatus.textContent = err.message || '取消授权失败');
+        return;
+      }
+      if (authCodeDeleteBtn) {
+        deleteAuthCode(authCodeDeleteBtn.dataset.authCodeDelete).catch(err => els.authStatus.textContent = err.message || '删除授权码失败');
+        return;
+      }
+      if (authCodeBtn) {
+        copyText(authCodeBtn.dataset.authCode || '');
+        authCodeBtn.textContent = '已复制';
+        setTimeout(() => authCodeBtn.textContent = '复制', 1200);
+        return;
+      }
+      if (cardDeleteBtn) {
+        deleteCard(cardDeleteBtn.dataset.cardDelete).catch(err => els.cardStatus.textContent = err.message || '删除卡密失败');
         return;
       }
       if (!recordBtn && !cardBtn) return;
@@ -1637,6 +2296,8 @@ function renderAdminPage() {
     els.loginBtn.addEventListener('click', e => {e.preventDefault(); login().catch(err => els.status.textContent = err.message || '登录失败');});
     els.cardForm.addEventListener('submit', e => {e.preventDefault(); createCards().catch(err => els.cardStatus.textContent = err.message || '生成失败');});
     els.authForm.addEventListener('submit', e => {e.preventDefault(); saveAuthorization().catch(err => els.authStatus.textContent = err.message || '保存授权失败');});
+    els.authPermanent.addEventListener('change', syncAuthDurationInputs);
+    els.authCodePermanent.addEventListener('change', syncAuthCodeDurationInputs);
     els.refresh.addEventListener('click', () => loadSummary().catch(err => els.status.textContent = err.message || '读取失败'));
     [els.cardUsageFilter, els.cardModeFilter, els.cardSearch, els.authListModeFilter, els.authTypeFilter, els.authSearch, els.recordModeFilter, els.recordSearch].forEach(el => {
       el.addEventListener('input', renderFilteredTables);
@@ -1650,6 +2311,14 @@ function renderAdminPage() {
     });
     els.copyAll.addEventListener('click', () => copyText(latestFilteredRecords.map(recordText).join('\\n\\n---\\n\\n')));
     els.copyNewCards.addEventListener('click', () => copyText(latestNewCards.map(c => c.code).join('\\n')));
+    els.copyNewAuthCodes.addEventListener('click', () => copyText(latestNewAuthCodes.map(c => c.code).join('\\n')));
+    document.querySelectorAll('[data-admin-tab]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tab = btn.dataset.adminTab || 'overview';
+        document.querySelectorAll('[data-admin-tab]').forEach(item => item.classList.toggle('active', item === btn));
+        document.querySelectorAll('[data-admin-view]').forEach(view => view.classList.toggle('hidden-view', view.dataset.adminView !== tab));
+      });
+    });
     if (token) {
       showAuthed(true);
       loadSummary().catch(() => showAuthed(false));
@@ -1664,6 +2333,131 @@ function renderAdminPage() {
 function buildSiteUrl(host, port) {
   const suffix = Number(port) === 80 ? '' : `:${port}`;
   return `http://${host}${suffix}/`;
+}
+
+function renderPortalPage() {
+  const cards = [
+    ['纯净版', '只保留雷达展示和地图切换能力，适合快速搭建展示站。'],
+    ['卡密版', '带本地卡密后台，适合需要自己发放访问卡密的场景。'],
+    ['运营版', '完整前后台、数据库、APP 下载与运营配置，适合正式运营。'],
+  ];
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>王者雷达部署中心</title>${portalCss()}</head><body><main class="wrap"><section class="hero"><div><p class="eyebrow">WZ Radar Deploy Center</p><h1>王者雷达三版本部署与源码下载</h1><p class="lead">支持一键部署，也支持下载源码手动搭建。无论哪种方式，页面和 Java 后端都会连接你的授权服务器校验授权。</p><div class="actions"><a class="btn primary" href="/deploy">进入一键部署</a><a class="btn" href="/source">源码下载与教程</a><a class="btn ghost" href="/admin">后台管理</a></div></div></section><section class="grid">${cards.map(([t,d])=>`<article class="card"><h2>${t}</h2><p>${d}</p><ul><li>保留服务器授权校验</li><li>支持源码版本升级提示</li><li>可用一键部署或手动搭建</li></ul></article>`).join('')}</section><section class="panel"><h2>推荐流程</h2><div class="steps"><div><b>1. 一键部署</b><span>填写服务器信息和部署卡密，自动安装环境、上传源码、启动 Java 服务。</span></div><div><b>2. 手动搭建</b><span>下载对应源码包，上传到网站目录，按教程配置 Nginx、PHP/数据库和 wz.jar。</span></div><div><b>3. 授权管理</b><span>后台可按 IP/域名授权，也可生成授权码给用户在未授权页面兑换。</span></div></div></section></main></body></html>`;
+}
+
+function renderSourceDownloadPage() {
+  const variants = [
+    ['clean', '纯净版源码', '无登录接口，适合展示和轻量使用。'],
+    ['card', '卡密版源码', '包含卡密后台与授权脚本。'],
+    ['ops', '运营版源码', '完整运营版前后台、数据库与 APP 目录。'],
+  ];
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>源码下载与手动搭建教程</title>${portalCss()}</head><body><main class="wrap"><section class="hero small"><div><p class="eyebrow">Source Packages</p><h1>源码下载与手动搭建教程</h1><p class="lead">下载包会自动带上授权校验脚本，手动搭建后仍会请求授权服务器校验，不会绕过授权。</p><div class="actions"><a class="btn" href="/">返回导航页</a><a class="btn primary" href="/deploy">使用一键部署</a></div></div></section><section class="grid">${variants.map(([m,t,d])=>`<article class="card"><h2>${t}</h2><p>${d}</p><a class="btn primary wide" href="/api/source/download/${m}">下载 ${t}</a></article>`).join('')}</section><section class="panel"><h2>手动搭建教程</h2><ol><li>在本页下载对应版本源码包，并上传到服务器网站目录，例如 <code>/www/wwwroot/wzry</code>。</li><li>解压后确认根目录存在 <code>index.html</code>、<code>radar-license.js</code> 和 <code>wz.jar</code>。授权脚本不要删除。</li><li>配置 Nginx 指向该目录，网站端口自行选择；Java 后端运行 <code>wz.jar</code>，监听项目需要的端口。</li><li>卡密版需要 PHP 支持，并保留 <code>api</code>、<code>admin</code>、<code>data</code>、<code>layui</code> 目录。</li><li>运营版需要按包内目录部署前后台、数据库和 APP 下载目录，建议优先使用一键部署自动安装。</li><li>打开页面后，如果服务器未授权，会出现授权提示；可在后台按 IP/域名授权，或生成授权码让用户在页面输入兑换。</li></ol></section><section class="panel"><h2>一键部署教程</h2><ol><li>进入 <a href="/deploy">一键部署页面</a>，填写部署卡密后会显示剩余次数。</li><li>填写服务器 IP、SSH 端口、root 账号密码和网站端口。</li><li>选择纯净版、卡密版或运营版；运营版可直接从授权服务器源码包部署。</li><li>点击测试连接，确认服务器可登录后开始部署。</li><li>部署完成后到后台查看服务器信息、授权状态、卡密和授权码。</li></ol></section></main></body></html>`;
+}
+
+function portalCss() {
+  return `<style>*{box-sizing:border-box}body{margin:0;background:#07111f;color:#eaf4ff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}body:before{content:"";position:fixed;inset:0;z-index:-1;background:radial-gradient(circle at 16% 0%,rgba(45,212,191,.22),transparent 34%),radial-gradient(circle at 88% 12%,rgba(96,165,250,.22),transparent 30%),linear-gradient(135deg,#08121f,#0c1726 55%,#111827)}.wrap{max-width:1180px;margin:0 auto;padding:28px 18px 54px}.hero{min-height:360px;display:flex;align-items:center}.hero.small{min-height:260px}.eyebrow{color:#67e8f9;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin:0 0 10px}h1{font-size:clamp(30px,5vw,56px);line-height:1.08;margin:0 0 16px}h2{margin:0 0 10px}.lead{max-width:760px;color:#b7c7dc;font-size:17px;line-height:1.75;margin:0 0 22px}.actions{display:flex;gap:12px;flex-wrap:wrap}.btn{display:inline-flex;align-items:center;justify-content:center;height:42px;padding:0 16px;border-radius:8px;border:1px solid rgba(125,211,252,.25);background:rgba(15,23,42,.68);color:#dff6ff;text-decoration:none;font-weight:800}.btn.primary{background:linear-gradient(135deg,#2dd4bf,#60a5fa);color:#041016;border:0}.btn.ghost{background:transparent}.btn.wide{width:100%;margin-top:12px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.card,.panel{background:rgba(10,20,32,.78);border:1px solid rgba(148,163,184,.17);border-radius:8px;padding:18px;box-shadow:0 18px 48px rgba(0,0,0,.24)}.card p,.panel li,.steps span{color:#b7c7dc;line-height:1.7}.card ul{padding-left:18px;margin:12px 0 0;color:#dbeafe}.panel{margin-top:16px}.steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.steps div{border:1px solid rgba(125,211,252,.16);border-radius:8px;padding:14px;background:rgba(2,8,23,.32)}.steps b{display:block;color:#7dd3fc;margin-bottom:6px}code{background:rgba(125,211,252,.12);color:#bae6fd;border-radius:5px;padding:2px 6px}a{color:#7dd3fc}@media(max-width:820px){.hero{min-height:300px}.grid,.steps{grid-template-columns:1fr}.actions .btn{width:100%}}</style>`;
+}
+
+async function buildManualSourcePackage(mode) {
+  const sourceDir = await prepareManualSourceDir(mode);
+  const outDir = path.join(DATA_DIR, 'manual-source-packages');
+  fs.mkdirSync(outDir, { recursive: true });
+  const ext = process.platform === 'win32' ? 'zip' : 'tar.gz';
+  const outFile = path.join(outDir, `wz-${mode}-source-${SOURCE_VERSION.version}.${ext}`);
+  await archiveDirectory(sourceDir, outFile);
+  return outFile;
+}
+
+async function prepareManualSourceDir(mode) {
+  const tmpRoot = path.join(DATA_DIR, 'manual-source-work', `${mode}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`);
+  fs.mkdirSync(tmpRoot, { recursive: true });
+  const target = path.join(tmpRoot, `wz-${mode}-source`);
+  if (mode === 'ops') {
+    await copyDir(path.resolve(__dirname, '..', '网页前后台'), target);
+  } else {
+    await copyDir(PAYLOAD_VARIANTS[mode].dir, target);
+  }
+  injectManualLicenseRuntime(target, mode);
+  fs.writeFileSync(path.join(target, '手动搭建说明.txt'), manualReadme(mode), 'utf8');
+  return target;
+}
+
+function injectManualLicenseRuntime(dir, mode) {
+  const config = {
+    serverUrl: LICENSE_SERVER_URL,
+    host: '',
+    mode: mode === 'ops' ? 'ops' : mode,
+    sourceVersion: SOURCE_VERSION.version,
+    permanent: false,
+    groupUrl: AUTH_GROUP_URL,
+    groupName: '王者雷达共享开黑组队群',
+  };
+  const js = buildManualLicenseGuardJs(config);
+  fs.writeFileSync(path.join(dir, 'radar-license.js'), js, 'utf8');
+  for (const name of ['index.html', 'index.php']) {
+    const file = path.join(dir, name);
+    if (!fs.existsSync(file)) continue;
+    const html = fs.readFileSync(file, 'utf8');
+    fs.writeFileSync(file, injectManualLicenseScriptTag(html), 'utf8');
+  }
+}
+
+function injectManualLicenseScriptTag(html) {
+  const text = String(html || '');
+  if (/radar-license\.js/i.test(text)) return text;
+  const tag = '<script src="/radar-license.js?v=manual20260623"></script>';
+  if (/<\/body>/i.test(text)) return text.replace(/<\/body>/i, `${tag}\n</body>`);
+  return `${text}\n${tag}\n`;
+}
+
+function buildManualLicenseGuardJs(config) {
+  const cfg = JSON.stringify(config).replace(/</g, '\\u003c');
+  return `(function(){'use strict';var cfg=${cfg};if(!cfg.host)cfg.host=location.hostname||'';function esc(s){return String(s||'').replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}function closeSocket(){try{if(window.socket&&window.socket.readyState!==3)window.socket.close();}catch(e){}}function allow(data){var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();window.__radarServerAuthorized=true;return true;}function redeem(input,statusEl,btn){var code=String(input&&input.value||'').trim();if(!code){statusEl.textContent='请输入授权码';return;}btn.disabled=true;statusEl.textContent='正在授权...';fetch(String(cfg.serverUrl).replace(/\\/+$/,'')+'/api/license/redeem',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:code,host:cfg.host,domain:location.hostname||'',mode:cfg.mode||'all'})}).then(function(r){return r.json().then(function(d){return {ok:r.ok,data:d};});}).then(function(ret){if(!ret.ok||!ret.data||!ret.data.ok){statusEl.textContent=(ret.data&&ret.data.message)||'授权码无效';return;}statusEl.textContent='授权成功，正在刷新...';allow(ret.data);setTimeout(function(){location.reload();},600);}).catch(function(){statusEl.textContent='授权服务器连接失败';}).then(function(){btn.disabled=false;});}function block(message){closeSocket();var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();var box=document.createElement('div');box.id='radarLicenseBlocker';box.style.cssText='position:fixed;inset:0;z-index:2147483647;background:rgba(4,8,18,.92);display:flex;align-items:center;justify-content:center;padding:18px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif;color:#e8eefc;';box.innerHTML='<div style="width:min(560px,94vw);background:#111827;border:1px solid rgba(96,165,250,.35);border-radius:14px;padding:24px;box-shadow:0 24px 70px rgba(0,0,0,.45);text-align:center"><h2 style="margin:0 0 12px;font-size:24px;color:#fef3c7">需要服务器授权</h2><p style="margin:0 0 16px;line-height:1.7;color:#cbd5e1">'+esc(message||'当前服务器未授权，请输入授权码。')+'</p><div style="display:grid;grid-template-columns:1fr auto;gap:10px;margin:0 auto 10px;max-width:420px"><input id="radarLicenseCodeInput" autocomplete="one-time-code" placeholder="输入授权码" style="height:42px;border-radius:8px;border:1px solid rgba(96,165,250,.35);background:rgba(15,23,42,.92);color:#e0f2fe;padding:0 12px;outline:none;font-size:14px"><button id="radarLicenseRedeemBtn" type="button" style="height:42px;border:0;border-radius:8px;background:#38bdf8;color:#06111f;font-weight:800;padding:0 16px;cursor:pointer">授权</button></div><div id="radarLicenseRedeemStatus" style="min-height:20px;margin-bottom:14px;color:#fef3c7;font-size:13px"></div><a href="'+esc(cfg.groupUrl||'#')+'" target="_blank" rel="noopener" style="color:#7dd3fc;font-weight:800">加入群聊找授权码</a></div>';document.body.appendChild(box);var input=box.querySelector('#radarLicenseCodeInput'),btn=box.querySelector('#radarLicenseRedeemBtn'),statusEl=box.querySelector('#radarLicenseRedeemStatus');btn.onclick=function(){redeem(input,statusEl,btn);};input.onkeydown=function(e){if(e.key==='Enter')redeem(input,statusEl,btn);};}function trialKey(){return 'wzry.manual.trial.'+(cfg.host||location.hostname||'server');}function trialStart(){var now=Date.now();try{var old=Number(localStorage.getItem(trialKey())||0);if(!old){localStorage.setItem(trialKey(),String(now));return now;}return old;}catch(e){return now;}}function trialLeft(){return Math.max(0,3*24*60*60*1000-(Date.now()-trialStart()));}function check(){var url=String(cfg.serverUrl).replace(/\\/+$/,'')+'/api/license/check?host='+encodeURIComponent(cfg.host)+'&domain='+encodeURIComponent(location.hostname||'')+'&mode='+encodeURIComponent(cfg.mode||'all')+'&_='+Date.now();return fetch(url,{cache:'no-store'}).then(function(r){return r.json();}).then(function(data){if(data&&data.authorized)return allow(data);if(data&&data.blocked){block(data.message||'当前服务器已被后台停止使用。');return false;}if(trialLeft()>0)return true;block(data&&data.message?data.message:'免费使用已到期，需要授权后才能继续使用。');return false;}).catch(function(){if(trialLeft()>0)return true;block('授权服务器连接失败，请联系管理员。');return false;});}document.addEventListener('DOMContentLoaded',check);window.RadarServerLicense={check:check};})();`;
+}
+
+function manualReadme(mode) {
+  return `手动搭建说明
+
+版本：${mode}
+授权服务器：${LICENSE_SERVER_URL}
+
+1. 将本目录上传到网站根目录，例如 /www/wwwroot/wzry。
+2. 保留 radar-license.js，不要删除 index.html 里的授权脚本引用。
+3. Nginx 网站目录指向本目录。
+4. 运行 wz.jar 作为 Java 后端服务。
+5. 打开页面后如提示未授权，可在授权后台添加服务器 IP/域名，或输入后台生成的授权码。
+`;
+}
+
+async function copyDir(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const from = path.join(src, entry.name);
+    const to = path.join(dest, entry.name);
+    if (entry.isDirectory()) await copyDir(from, to);
+    else if (entry.isFile()) fs.copyFileSync(from, to);
+  }
+}
+
+function archiveDirectory(src, outFile) {
+  fs.mkdirSync(path.dirname(outFile), { recursive: true });
+  try { fs.unlinkSync(outFile); } catch (_) {}
+  if (process.platform !== 'win32') {
+    return new Promise((resolve, reject) => {
+      execFile('tar', ['-czf', outFile, '-C', path.dirname(src), path.basename(src)], { windowsHide: true }, (err) => err ? reject(err) : resolve(outFile));
+    });
+  }
+  return new Promise((resolve, reject) => {
+    const ps = [
+      '-NoProfile',
+      '-Command',
+      `Compress-Archive -LiteralPath ${psQuote(path.join(src, '*'))} -DestinationPath ${psQuote(outFile)} -Force`,
+    ];
+    execFile('powershell.exe', ps, { windowsHide: true }, (err) => err ? reject(err) : resolve(outFile));
+  });
+}
+
+function psQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 function payloadDirForMode(mode) {
@@ -1842,12 +2636,15 @@ function buildOpsInstallCommand(creds, installCode) {
   if (creds.opsDbRootPassword) baseArgs.push(`--db-root-password ${shQuote(creds.opsDbRootPassword)}`);
   if (creds.opsDbPassword) baseArgs.push(`--db-password ${shQuote(creds.opsDbPassword)}`);
   if (creds.opsAdminPassword) baseArgs.push(`--admin-password ${shQuote(creds.opsAdminPassword)}`);
+  const opsSourceUrl = buildOpsSourceUrl(creds);
+  if (opsSourceUrl) baseArgs.push(`--ops-source-url ${shQuote(opsSourceUrl)}`);
   baseArgs.push('-y');
 
   const licenseArgs = [
     `--license-host ${shQuote(creds.host)}`,
     `--license-server ${shQuote(LICENSE_SERVER_URL)}`,
     `--license-group-url ${shQuote(AUTH_GROUP_URL)}`,
+    `--license-source-version ${shQuote(SOURCE_VERSION.version)}`,
   ];
   if (creds.licenseConfig && creds.licenseConfig.permanent) licenseArgs.push('--license-permanent');
 
@@ -1871,6 +2668,13 @@ function buildOpsInstallCommand(creds, installCode) {
   return `bash -lc ${shQuote(body)}`;
 }
 
+function buildOpsSourceUrl(creds) {
+  if (!OPS_SOURCE_TOKEN) return '';
+  const base = String(LICENSE_SERVER_URL || '').replace(/\/+$/, '');
+  if (!base) return '';
+  return `${base}/api/ops-source.tar.gz?token=${encodeURIComponent(OPS_SOURCE_TOKEN)}`;
+}
+
 function loadLocalOpsInstallScriptBase64() {
   const candidates = [
     path.resolve(__dirname, '..', 'scripts', 'cloud-install.sh'),
@@ -1884,6 +2688,95 @@ function loadLocalOpsInstallScriptBase64() {
     } catch (_) {}
   }
   return '';
+}
+
+async function ensureOpsSourcePackage() {
+  const webPublishDir = path.resolve(__dirname, '..', '网页前后台');
+  const appDir = path.resolve(__dirname, '..', 'APP');
+  if (!fs.existsSync(webPublishDir) || !fs.existsSync(appDir)) {
+    return;
+  }
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const latestSourceTime = Math.max(mtimeMsDeep(webPublishDir), mtimeMsDeep(appDir));
+  const currentTime = fs.existsSync(OPS_SOURCE_PACKAGE_FILE) ? fs.statSync(OPS_SOURCE_PACKAGE_FILE).mtimeMs : 0;
+  if (currentTime >= latestSourceTime) {
+    return;
+  }
+
+  const stage = path.join(DATA_DIR, 'ops-source-stage');
+  fs.rmSync(stage, { recursive: true, force: true });
+  fs.mkdirSync(path.join(stage, 'APP'), { recursive: true });
+  copyDirSync(webPublishDir, path.join(stage, '网页前后台'), shouldIncludeOpsWebFile);
+  copySelectedAppFiles(appDir, path.join(stage, 'APP'));
+
+  const tarPath = OPS_SOURCE_PACKAGE_FILE.replace(/\\/g, '/');
+  const stagePosix = stage.replace(/\\/g, '/');
+  const cmd = `tar -czf ${shQuote(tarPath)} -C ${shQuote(stagePosix)} APP 网页前后台`;
+  await execLocal(cmd);
+  fs.rmSync(stage, { recursive: true, force: true });
+}
+
+function shouldIncludeOpsWebFile(relPath) {
+  const rel = relPath.replace(/\\/g, '/');
+  return !/(^|\/)(auth\/config\.php|auth\/install\.lock|logs\/|\.git\/)/i.test(rel)
+    && !/\.log$/i.test(rel);
+}
+
+function copySelectedAppFiles(srcDir, dstDir) {
+  const files = [
+    'install-services.sh',
+    'start-server.sh',
+    'restore-whitelist.sh',
+    'ws-whitelist-helper.sh',
+    'setup-whitelist-iptables.sh',
+    'nginx-whitelist-ws.conf',
+    path.join('auth', 'upgrade_whitelist.sql'),
+  ];
+  for (const rel of files) {
+    const src = path.join(srcDir, rel);
+    const dst = path.join(dstDir, rel);
+    if (!fs.existsSync(src)) continue;
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.copyFileSync(src, dst);
+  }
+}
+
+function copyDirSync(srcDir, dstDir, filter) {
+  fs.mkdirSync(dstDir, { recursive: true });
+  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    const src = path.join(srcDir, entry.name);
+    const dst = path.join(dstDir, entry.name);
+    const rel = path.relative(srcDir, src);
+    if (filter && !filter(rel + (entry.isDirectory() ? path.sep : ''))) continue;
+    if (entry.isDirectory()) copyDirSync(src, dst, (childRel) => filter(path.join(rel, childRel)));
+    else if (entry.isFile()) fs.copyFileSync(src, dst);
+  }
+}
+
+function mtimeMsDeep(target) {
+  if (!fs.existsSync(target)) return 0;
+  const st = fs.statSync(target);
+  if (!st.isDirectory()) return st.mtimeMs;
+  let max = st.mtimeMs;
+  for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
+    if (entry.name === '.git' || entry.name === 'build' || entry.name === 'node_modules') continue;
+    max = Math.max(max, mtimeMsDeep(path.join(target, entry.name)));
+  }
+  return max;
+}
+
+function execLocal(cmd) {
+  const { exec } = require('child_process');
+  return new Promise((resolve, reject) => {
+    exec(cmd, { windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        err.message = `${err.message}\n${stderr || stdout || ''}`.trim();
+        reject(err);
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+  });
 }
 
 function buildCleanupCommand(creds) {

@@ -168,19 +168,13 @@ WantedBy=multi-user.target`;
     await sshExec(conn, 'systemctl daemon-reload');
     await sshExec(conn, 'systemctl enable radar-deployer.service');
     await sshExec(conn, 'systemctl stop radar-deployer.service 2>/dev/null || true');
-    await sshExec(conn, 'systemctl start radar-deployer.service');
-    await sshExec(conn, 'sleep 3');
-
-    console.log('Testing server startup (foreground)...');
+    console.log('Checking server syntax...');
     const envParts = [`ADMIN_USERNAME=${shellQuote(adminUser)}`];
     if (adminPassword) envParts.push(`ADMIN_PASSWORD=${shellQuote(adminPassword)}`);
     envParts.push(`PAYLOAD_DIR=${shellQuote(REMOTE_WEB_DIR)}`);
-    const foregroundCmd = `${envParts.join(' ')} node server.js`;
-    try {
-      await sshExec(conn, `cd '${REMOTE_APP_DIR}' && timeout 5 bash -lc ${shellQuote(foregroundCmd)} 2>&1 || true`);
-    } catch (_) {}
+    await sshExec(conn, `cd '${REMOTE_APP_DIR}' && node --check server.js && node --check deployer.js`);
 
-    console.log('Starting server (background)...');
+    console.log('Starting server...');
     await sshExec(conn, 'systemctl restart radar-deployer.service');
     await sshExec(conn, 'sleep 5');
 

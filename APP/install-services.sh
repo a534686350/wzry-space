@@ -17,8 +17,11 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${1:-$SCRIPT_DIR}"
 PROJECT_DIR="$(realpath "$PROJECT_DIR")"
+LICENSE_SERVER="${LICENSE_SERVER:-http://101.200.36.103:3000}"
+LICENSE_HOST="${LICENSE_HOST:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
+LICENSE_MODE="${LICENSE_MODE:-ops}"
 
-JAR_PATH="$PROJECT_DIR/home-server-0.0.1-SNAPSHOT.jar"
+JAR_PATH="$PROJECT_DIR/wz.jar"
 START_SCRIPT="$PROJECT_DIR/start-server.sh"
 RESTORE_SCRIPT="$PROJECT_DIR/restore-whitelist.sh"
 HELPER_SCRIPT="$PROJECT_DIR/ws-whitelist-helper.sh"
@@ -48,6 +51,9 @@ Wants=restore-whitelist.service
 [Service]
 Type=simple
 WorkingDirectory=$PROJECT_DIR
+Environment=LICENSE_SERVER=$LICENSE_SERVER
+Environment=LICENSE_HOST=$LICENSE_HOST
+Environment=LICENSE_MODE=$LICENSE_MODE
 ExecStart=$HOME_SERVER_EXEC
 User=root
 Restart=always

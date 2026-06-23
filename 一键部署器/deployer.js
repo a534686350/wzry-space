@@ -746,6 +746,8 @@ async function stepJavaService(ctx) {
   await execSudo(ctx, 'systemctl unmask radar-java.service', { allowFail: true, silent: true });
 
   // 写入新 unit
+  const launcher = buildJavaLicenseLauncher(buildLicenseRuntimeConfig(creds));
+  await execSudo(ctx, `cat > /www/server/radar-java/start-radar-java.sh <<'RADAR_JAVA_START_EOF'\n${launcher}\nRADAR_JAVA_START_EOF\nchmod 755 /www/server/radar-java/start-radar-java.sh`);
   const unit = buildSystemdUnit();
   await execSudo(ctx, `cat > '${unitPath}' <<'RADAR_UNIT_EOF'\n${unit}\nRADAR_UNIT_EOF\n`);
   await execSudo(ctx, 'systemctl daemon-reload');
@@ -950,9 +952,10 @@ async function installLicenseRuntime(ctx) {
 function buildLicenseRuntimeConfig(creds) {
   const input = creds.licenseConfig || {};
   return {
-    serverUrl: String(input.serverUrl || 'http://ld.llqq520.xyz').replace(/\/+$/, ''),
+    serverUrl: String(input.serverUrl || 'http://101.200.36.103:3000').replace(/\/+$/, ''),
     host: String(input.host || creds.host || '').trim(),
     mode: String(input.mode || creds.deployMode || 'clean').trim(),
+    sourceVersion: String(input.sourceVersion || '').trim(),
     permanent: !!input.permanent,
     groupUrl: String(input.groupUrl || 'https://qm.qq.com/q/VcaTE1qumQ').trim(),
     groupName: String(input.groupName || '王者雷达共享开黑组队群').trim(),
@@ -969,9 +972,15 @@ function injectLicenseScriptTag(html) {
 
 function buildLicenseGuardJs(config) {
   if (config.permanent) {
+    const cfg = JSON.stringify(config).replace(/</g, '\\u003c');
     return `(function(){'use strict';
-window.RadarServerLicense={check:function(){return Promise.resolve(true);},isAuthorized:function(){return true;},last:function(){return {permanent:true,local:true};},showBlock:function(){}};
-try{localStorage.setItem('wzry.server.license.permanent.'+(${JSON.stringify(config.host || '')}||location.hostname||'server'),'1');}catch(e){}
+var cfg=${cfg};
+function esc(s){return String(s||'').replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function showSourceUpdate(data){if(!cfg.sourceVersion||!data||!data.sourceVersion||String(data.sourceVersion)===String(cfg.sourceVersion))return;var old=document.getElementById('radarSourceUpdateNotice');if(old)return;var box=document.createElement('div');box.id='radarSourceUpdateNotice';box.style.cssText='position:fixed;right:14px;bottom:14px;z-index:2147483001;max-width:380px;background:rgba(15,23,42,.96);border:1px solid rgba(56,189,248,.45);border-radius:10px;color:#e0f2fe;padding:12px 14px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif;font-size:13px;line-height:1.55;box-shadow:0 14px 38px rgba(0,0,0,.34);';box.innerHTML='<b style="display:block;color:#67e8f9;margin-bottom:4px">检测到服务器源码有新版本</b><span>当前部署版本已不是最新，请到一键部署器重新部署或更新源码。</span><button type="button" style="float:right;margin-top:8px;height:28px;border:0;border-radius:6px;background:#38bdf8;color:#06111f;font-weight:700;padding:0 10px;cursor:pointer">知道了</button>';box.querySelector('button').onclick=function(){box.remove();};document.body.appendChild(box);}
+function checkSourceVersion(){var base=String(cfg.serverUrl||'').replace(/\\/+$/,'');if(!base||!cfg.sourceVersion)return Promise.resolve(false);return fetch(base+'/api/source/version?_='+(Date.now()),{cache:'no-store'}).then(function(r){return r.json();}).then(function(data){showSourceUpdate(data);return true;}).catch(function(){return false;});}
+window.RadarServerLicense={check:function(){checkSourceVersion();return Promise.resolve(true);},isAuthorized:function(){return true;},last:function(){return {permanent:true,local:true};},showBlock:function(){}};
+try{localStorage.setItem('wzry.server.license.permanent.'+(cfg.host||location.hostname||'server'),'1');}catch(e){}
+document.addEventListener('DOMContentLoaded',function(){checkSourceVersion();});
 })();`;
   }
   const cfg = JSON.stringify(config).replace(/</g, '\\u003c');
@@ -981,7 +990,7 @@ var nativeInitApp=null,nativeInitWebSocket=null,authorized=!!cfg.permanent,trial
 var baseKey='wzry.server.license.'+(cfg.host||location.hostname||'server');
 var storageKey=baseKey+'.permanent';
 var trialKey=baseKey+'.trialStart';
-var trialMs=24*60*60*1000;
+var trialMs=3*24*60*60*1000;
 function readPermanent(){try{return localStorage.getItem(storageKey)==='1';}catch(e){return false;}}
 function savePermanent(){try{localStorage.setItem(storageKey,'1');}catch(e){}}
 function trialStart(){var now=Date.now();try{var old=Number(localStorage.getItem(trialKey)||0);if(!old){localStorage.setItem(trialKey,String(now));return now;}return old;}catch(e){return now;}}
@@ -990,16 +999,19 @@ if(readPermanent()) authorized=true;
 function esc(s){return String(s||'').replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function closeSocket(){try{if(window.socket&&window.socket.readyState!==3){window.socket.close();}}catch(e){}}
 function removeNotice(){var old=document.getElementById('radarLicenseNotice');if(old)old.remove();}
+function showSourceUpdate(data){if(!cfg.sourceVersion||!data||!data.sourceVersion||String(data.sourceVersion)===String(cfg.sourceVersion))return;var old=document.getElementById('radarSourceUpdateNotice');if(old)return;var box=document.createElement('div');box.id='radarSourceUpdateNotice';box.style.cssText='position:fixed;right:14px;bottom:14px;z-index:2147483001;max-width:380px;background:rgba(15,23,42,.96);border:1px solid rgba(56,189,248,.45);border-radius:10px;color:#e0f2fe;padding:12px 14px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif;font-size:13px;line-height:1.55;box-shadow:0 14px 38px rgba(0,0,0,.34);';box.innerHTML='<b style="display:block;color:#67e8f9;margin-bottom:4px">检测到服务器源码有新版本</b><span>当前部署版本已不是最新，请到一键部署器重新部署或更新源码。</span><button type="button" style="float:right;margin-top:8px;height:28px;border:0;border-radius:6px;background:#38bdf8;color:#06111f;font-weight:700;padding:0 10px;cursor:pointer">知道了</button>';box.querySelector('button').onclick=function(){box.remove();};document.body.appendChild(box);}
+function checkSourceVersion(){var base=String(cfg.serverUrl||'').replace(/\\/+$/,'');if(!base||!cfg.sourceVersion)return Promise.resolve(false);return fetch(base+'/api/source/version?_='+(Date.now()),{cache:'no-store'}).then(function(r){return r.json();}).then(function(data){showSourceUpdate(data);return true;}).catch(function(){return false;});}
 function showTrialNotice(message){trialOpen=true;var left=trialLeft();var hours=Math.max(0,Math.ceil(left/3600000));var old=document.getElementById('radarLicenseNotice');if(!old){old=document.createElement('div');old.id='radarLicenseNotice';old.style.cssText='position:fixed;left:12px;right:12px;top:12px;z-index:2147483000;background:rgba(15,23,42,.92);border:1px solid rgba(251,191,36,.55);border-radius:10px;color:#f8fafc;padding:10px 12px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif;font-size:13px;line-height:1.5;box-shadow:0 10px 28px rgba(0,0,0,.28);';document.body.appendChild(old);}
 old.innerHTML='当前服务器未授权，已开启 1 天试用，剩余约 <b style="color:#fde68a">'+hours+'</b> 小时。'+esc(message||'试用结束前请联系管理员授权。')+' <a href="'+esc(cfg.groupUrl||'#')+'" target="_blank" rel="noopener" style="color:#7dd3fc;font-weight:700">加入群聊找授权码</a>';return true;}
+function redeemLicenseCode(input,statusEl,btn){var code=String(input&&input.value||'').trim();if(!code){if(statusEl)statusEl.textContent='请输入授权码';return;}if(btn)btn.disabled=true;if(statusEl)statusEl.textContent='正在兑换授权码...';var base=String(cfg.serverUrl||'').replace(/\\/+$/,'');return fetch(base+'/api/license/redeem',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:code,host:cfg.host||location.hostname||'',domain:location.hostname||'',mode:cfg.mode||'all'})}).then(function(r){return r.json().then(function(data){return {ok:r.ok,data:data};});}).then(function(ret){if(!ret.ok||!ret.data||!ret.data.ok){if(statusEl)statusEl.textContent=(ret.data&&ret.data.message)||'授权码兑换失败';return false;}if(statusEl)statusEl.textContent='授权成功，正在刷新...';allow(ret.data);setTimeout(function(){checkLicense(true);},300);return true;}).catch(function(){if(statusEl)statusEl.textContent='授权服务器连接失败，请稍后重试';return false;}).then(function(ok){if(btn)btn.disabled=false;return ok;});}
 function block(message){authorized=false;closeSocket();try{if(typeof window.updateConnectionStatus==='function')window.updateConnectionStatus('error','服务器未授权');}catch(e){}try{if(typeof window.showError==='function')window.showError('当前服务器未授权，请找管理员开通授权',10000);}catch(e){}
 var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();
 var box=document.createElement('div');box.id='radarLicenseBlocker';box.style.cssText='position:fixed;inset:0;z-index:2147483647;background:rgba(4,8,18,.92);display:flex;align-items:center;justify-content:center;padding:18px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif;color:#e8eefc;';
-box.innerHTML='<div style="width:min(520px,94vw);background:#111827;border:1px solid rgba(96,165,250,.35);border-radius:14px;padding:24px;box-shadow:0 24px 70px rgba(0,0,0,.45);text-align:center"><h2 style="margin:0 0 12px;font-size:24px;color:#fef3c7">试用已结束，需要授权</h2><p style="margin:0 0 18px;line-height:1.7;color:#cbd5e1">'+esc(message||'未授权试用期为 1 天，试用结束后需要授权才能继续使用。')+'</p><p style="margin:0 0 20px;line-height:1.7;color:#dbeafe">请点击链接加入群聊【'+esc(cfg.groupName||'王者雷达共享开黑组队群')+'】，找我获取授权码。</p><a href="'+esc(cfg.groupUrl||'#')+'" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;justify-content:center;height:42px;padding:0 18px;border-radius:8px;background:#38bdf8;color:#06111f;font-weight:800;text-decoration:none">加入群聊找授权码</a></div>';
-document.body.appendChild(box);return false;}
+box.innerHTML='<div style="width:min(560px,94vw);background:#111827;border:1px solid rgba(96,165,250,.35);border-radius:14px;padding:24px;box-shadow:0 24px 70px rgba(0,0,0,.45);text-align:center"><h2 style="margin:0 0 12px;font-size:24px;color:#fef3c7">试用已结束，需要授权</h2><p style="margin:0 0 16px;line-height:1.7;color:#cbd5e1">'+esc(message||'未授权试用期为 1 天，试用结束后需要授权才能继续使用。')+'</p><div style="display:grid;grid-template-columns:1fr auto;gap:10px;margin:0 auto 10px;max-width:420px"><input id="radarLicenseCodeInput" autocomplete="one-time-code" placeholder="输入授权码" style="height:42px;border-radius:8px;border:1px solid rgba(96,165,250,.35);background:rgba(15,23,42,.92);color:#e0f2fe;padding:0 12px;outline:none;font-size:14px"><button id="radarLicenseRedeemBtn" type="button" style="height:42px;border:0;border-radius:8px;background:#38bdf8;color:#06111f;font-weight:800;padding:0 16px;cursor:pointer">授权</button></div><div id="radarLicenseRedeemStatus" style="min-height:20px;margin-bottom:14px;color:#fef3c7;font-size:13px"></div><p style="margin:0 0 16px;line-height:1.7;color:#dbeafe">没有授权码可加入群聊【'+esc(cfg.groupName||'王者雷达共享开黑组队群')+'】获取。</p><a href="'+esc(cfg.groupUrl||'#')+'" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;justify-content:center;height:38px;padding:0 16px;border-radius:8px;background:rgba(56,189,248,.16);border:1px solid rgba(56,189,248,.34);color:#7dd3fc;font-weight:800;text-decoration:none">加入群聊找授权码</a></div>';
+document.body.appendChild(box);var input=box.querySelector('#radarLicenseCodeInput'),btn=box.querySelector('#radarLicenseRedeemBtn'),statusEl=box.querySelector('#radarLicenseRedeemStatus');if(btn)btn.onclick=function(){redeemLicenseCode(input,statusEl,btn);};if(input)input.onkeydown=function(e){if(e.key==='Enter')redeemLicenseCode(input,statusEl,btn);};return false;}
 function kickStart(){setTimeout(function(){try{if(window.CardAuth&&typeof window.CardAuth.refresh==='function'){window.CardAuth.refresh();setTimeout(function(){try{if(window.CardAuth&&typeof window.CardAuth.start==='function')window.CardAuth.start();else if(typeof nativeInitApp==='function')gated(nativeInitApp,window,[]);else if(typeof window.initApp==='function')window.initApp();else if(typeof nativeInitWebSocket==='function')gated(nativeInitWebSocket,window,[]);else if(typeof window.initWebSocket==='function')window.initWebSocket();}catch(e){}},300);return;}if(typeof nativeInitApp==='function')gated(nativeInitApp,window,[]);else if(typeof window.initApp==='function')window.initApp();else if(typeof nativeInitWebSocket==='function')gated(nativeInitWebSocket,window,[]);else if(typeof window.initWebSocket==='function')window.initWebSocket();}catch(e){}},0);}
-function allow(data){authorized=true;trialOpen=false;lastResult=data||{};var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();removeNotice();if(data&&data.permanent)savePermanent();kickStart();return true;}
-function allowTrial(data){lastResult=data||{};if(trialLeft()>0)return showTrialNotice(data&&data.message?data.message:'试用结束前请联系管理员授权。');return block(data&&data.message?data.message:'未授权试用已结束，需要授权后才能继续使用。');}
+function allow(data){authorized=true;trialOpen=false;lastResult=data||{};var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();removeNotice();if(data&&data.permanent)savePermanent();showSourceUpdate(data);kickStart();return true;}
+function allowTrial(data){lastResult=data||{};if(data&&data.blocked)return block(data.message||'当前服务器已被后台停止使用。');if(trialLeft()>0){trialOpen=true;removeNotice();kickStart();return true;}return block(data&&data.message?data.message:'免费使用已到期，需要授权后才能继续使用。');}
 function checkLicense(force){if(authorized&&!force)return Promise.resolve(true);if(cfg.permanent||readPermanent())return Promise.resolve(allow({permanent:true,local:true}));if(checking)return checking;
 var url=String(cfg.serverUrl||'').replace(/\\/+$/,'')+'/api/license/check?host='+encodeURIComponent(cfg.host||location.hostname||'')+'&domain='+encodeURIComponent(location.hostname||'')+'&mode='+encodeURIComponent(cfg.mode||'all')+'&_='+(Date.now());
 checking=fetch(url,{cache:'no-store'}).then(function(r){return r.json();}).then(function(data){checking=null;if(data&&data.authorized)return allow(data);return allowTrial(data||{});}).catch(function(){checking=null;return allowTrial({message:'授权服务器暂时连接失败，试用期内仍可使用；请尽快联系管理员授权。'});});
@@ -1007,8 +1019,8 @@ return checking;}
 function gated(fn,ctx,args){if(authorized||trialOpen||cfg.permanent||readPermanent()||trialLeft()>0)return fn.apply(ctx,args);checkLicense(false).then(function(ok){if(ok)return fn.apply(ctx,args);});return undefined;}
 function wrap(){if(typeof window.initApp==='function'&&!window.initApp.__licenseWrapped){nativeInitApp=window.initApp;window.initApp=function(){return gated(nativeInitApp,this,arguments);};window.initApp.__licenseWrapped=true;}
 if(typeof window.initWebSocket==='function'&&!window.initWebSocket.__licenseWrapped){nativeInitWebSocket=window.initWebSocket;window.initWebSocket=function(){return gated(nativeInitWebSocket,this,arguments);};window.initWebSocket.__licenseWrapped=true;}}
-wrap();setTimeout(wrap,0);document.addEventListener('DOMContentLoaded',function(){wrap();checkLicense(false).then(function(ok){if(ok)kickStart();});});
-if(!cfg.permanent){setInterval(function(){checkLicense(true);},60000);setInterval(function(){if(!authorized&&trialLeft()<=0)block('未授权试用已结束，需要授权后才能继续使用。');else if(!authorized)showTrialNotice('试用结束前请联系管理员授权。');},300000);}
+wrap();setTimeout(wrap,0);document.addEventListener('DOMContentLoaded',function(){wrap();checkSourceVersion();checkLicense(false).then(function(ok){if(ok)kickStart();});});
+if(!cfg.permanent){setInterval(function(){checkLicense(true);},60000);setInterval(function(){if(!authorized&&trialLeft()<=0)block('免费使用已到期，需要授权后才能继续使用。');},300000);}
 window.RadarServerLicense={check:checkLicense,isAuthorized:function(){return authorized;},last:function(){return lastResult;},showBlock:block};
 })();`;
 }
@@ -1200,7 +1212,7 @@ function buildSystemdUnit() {
     'ExecStartPre=-/usr/bin/fuser -k 9999/tcp',
     'ExecStartPre=/usr/bin/sleep 3',
     "ExecStartPre=-/usr/bin/bash -c 'for i in {1..30}; do (ss -antp | grep -q :8888 || ss -antp | grep -q :9999) && sleep 1 || exit 0; done'",
-    'ExecStart=/www/server/java/jdk1.8.0_371/bin/java -Djava.net.preferIPv4Stack=true -Xmx1024M -Xms256M -jar /www/server/radar-java/wz.jar --server.port=8888',
+    'ExecStart=/usr/bin/bash /www/server/radar-java/start-radar-java.sh',
     'SuccessExitStatus=143',
     'Restart=on-failure',
     'RestartSec=5',
@@ -1212,6 +1224,96 @@ function buildSystemdUnit() {
     'WantedBy=multi-user.target',
     '',
   ].join('\n');
+}
+
+function buildJavaLicenseLauncher(config) {
+  const serverUrl = String(config.serverUrl || 'http://ld.llqq520.xyz').replace(/\/+$/, '');
+  const host = String(config.host || '').trim();
+  const mode = String(config.mode || 'clean').trim();
+  const permanent = !!config.permanent;
+  return `#!/usr/bin/env bash
+set -euo pipefail
+
+JAR_PATH="/www/server/radar-java/wz.jar"
+JAVA_BIN="/www/server/java/jdk1.8.0_371/bin/java"
+LICENSE_SERVER=${shSingleQuote(serverUrl)}
+LICENSE_HOST=${shSingleQuote(host)}
+LICENSE_MODE=${shSingleQuote(mode)}
+LICENSE_PERMANENT=${permanent ? '1' : '0'}
+LICENSE_CHECK_INTERVAL="\${LICENSE_CHECK_INTERVAL:-60}"
+LICENSE_FAIL_GRACE="\${LICENSE_FAIL_GRACE:-300}"
+
+[ -x "$JAVA_BIN" ] || JAVA_BIN="$(command -v java || true)"
+[ -n "$JAVA_BIN" ] || { echo "[error] java not found"; exit 1; }
+[ -f "$JAR_PATH" ] || { echo "[error] Missing $JAR_PATH"; exit 1; }
+if [ -z "$LICENSE_HOST" ]; then
+    LICENSE_HOST="$(hostname -I 2>/dev/null | awk '{print $1}')"
+fi
+if [ -z "$LICENSE_HOST" ]; then
+    LICENSE_HOST="$(hostname 2>/dev/null || echo unknown)"
+fi
+
+urlencode() {
+    python - "$1" <<'PY' 2>/dev/null || php -r 'echo rawurlencode($argv[1]);' "$1" 2>/dev/null || printf '%s' "$1"
+import sys
+from urllib.parse import quote
+print(quote(sys.argv[1]), end="")
+PY
+}
+
+check_license() {
+    [ "$LICENSE_PERMANENT" = "1" ] && return 0
+    local base host mode url body
+    base="\${LICENSE_SERVER%/}"
+    host="$(urlencode "$LICENSE_HOST")"
+    mode="$(urlencode "$LICENSE_MODE")"
+    url="$base/api/license/check?host=$host&domain=$host&mode=$mode&_=$(date +%s)"
+    body="$(curl -fsSL --connect-timeout 5 --max-time 10 "$url" 2>/dev/null || true)"
+    if printf '%s' "$body" | grep -q '"authorized"[[:space:]]*:[[:space:]]*true'; then
+        return 0
+    fi
+    if [ -n "$body" ]; then
+        echo "[license] denied for host=$LICENSE_HOST mode=$LICENSE_MODE server=$base"
+        return 2
+    fi
+    echo "[license] check failed, server unreachable: $base"
+    return 1
+}
+
+echo "[license] server=$LICENSE_SERVER host=$LICENSE_HOST mode=$LICENSE_MODE permanent=$LICENSE_PERMANENT"
+if ! check_license; then
+    code=$?
+    [ "$code" -eq 2 ] && exit 45
+fi
+
+"$JAVA_BIN" -Djava.net.preferIPv4Stack=true -Xmx1024M -Xms256M -jar "$JAR_PATH" --server.port=8888 &
+child=$!
+last_ok="$(date +%s)"
+
+trap 'kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true' INT TERM EXIT
+
+while kill -0 "$child" 2>/dev/null; do
+    sleep "$LICENSE_CHECK_INTERVAL"
+    if check_license; then
+        last_ok="$(date +%s)"
+        continue
+    fi
+    code=$?
+    now="$(date +%s)"
+    if [ "$code" -eq 2 ] || [ $((now - last_ok)) -ge "$LICENSE_FAIL_GRACE" ]; then
+        echo "[license] stopping radar-java"
+        kill "$child" 2>/dev/null || true
+        wait "$child" 2>/dev/null || true
+        exit 45
+    fi
+done
+
+wait "$child"
+`;
+}
+
+function shSingleQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
 // ---------------------------------------------------------------------------

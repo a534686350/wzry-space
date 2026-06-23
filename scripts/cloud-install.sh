@@ -22,11 +22,13 @@ DB_PASSWORD="${DB_PASSWORD:-}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 RESET_ADMIN_KEY="${RESET_ADMIN_KEY:-}"
-LICENSE_SERVER="${LICENSE_SERVER:-http://ld.llqq520.xyz}"
+LICENSE_SERVER="${LICENSE_SERVER:-http://101.200.36.103:3000}"
 LICENSE_GROUP_URL="${LICENSE_GROUP_URL:-https://qm.qq.com/q/VcaTE1qumQ}"
 LICENSE_HOST="${LICENSE_HOST:-}"
 LICENSE_PERMANENT="${LICENSE_PERMANENT:-0}"
+LICENSE_SOURCE_VERSION="${LICENSE_SOURCE_VERSION:-}"
 REPO_URL="${REPO_URL:-}"
+OPS_SOURCE_URL="${OPS_SOURCE_URL:-}"
 SKIP_SERVICES=0
 SKIP_DB=0
 REINSTALL_DB=0
@@ -85,6 +87,8 @@ while [[ $# -gt 0 ]]; do
         --source=*) SOURCE="${1#*=}"; shift ;;
         --repo-url) REPO_URL="${2:-}"; shift 2 ;;
         --repo-url=*) REPO_URL="${1#*=}"; shift ;;
+        --ops-source-url) OPS_SOURCE_URL="${2:-}"; shift 2 ;;
+        --ops-source-url=*) OPS_SOURCE_URL="${1#*=}"; shift ;;
         --branch) BRANCH="${2:-}"; shift 2 ;;
         --branch=*) BRANCH="${1#*=}"; shift ;;
         --src-dir) SRC_DIR="${2:-}"; shift 2 ;;
@@ -115,6 +119,8 @@ while [[ $# -gt 0 ]]; do
         --license-host=*) LICENSE_HOST="${1#*=}"; shift ;;
         --license-group-url) LICENSE_GROUP_URL="${2:-}"; shift 2 ;;
         --license-group-url=*) LICENSE_GROUP_URL="${1#*=}"; shift ;;
+        --license-source-version) LICENSE_SOURCE_VERSION="${2:-}"; shift 2 ;;
+        --license-source-version=*) LICENSE_SOURCE_VERSION="${1#*=}"; shift ;;
         --license-permanent) LICENSE_PERMANENT=1; shift ;;
         --skip-db) SKIP_DB=1; shift ;;
         --skip-services) SKIP_SERVICES=1; shift ;;
@@ -468,6 +474,23 @@ build_repo_url() {
 
 sync_source() {
     green "正在远程下载源码，请稍等..."
+    if [[ -n "$OPS_SOURCE_URL" ]]; then
+        local archive tmp_dir
+        archive="/tmp/wzry-ops-source.tar.gz"
+        tmp_dir="/tmp/wzry-ops-source.$$"
+        rm -rf "$tmp_dir" "$archive"
+        mkdir -p "$tmp_dir" "$(dirname "$SRC_DIR")"
+        green "Downloading ops source package from license server..."
+        curl -fsSL --connect-timeout 10 --max-time 180 "$OPS_SOURCE_URL" -o "$archive" || die "Ops source package download failed"
+        tar -xzf "$archive" -C "$tmp_dir" || die "Ops source package extract failed"
+        [[ -d "$tmp_dir/APP" && -d "$tmp_dir/网页前后台" ]] || die "Ops source package missing APP or web publish directory"
+        rm -rf "$SRC_DIR"
+        mkdir -p "$SRC_DIR"
+        cp -a "$tmp_dir"/. "$SRC_DIR"/
+        rm -rf "$tmp_dir" "$archive"
+        green "Ops source package is ready"
+        return
+    fi
     local clone_url clean_url
     clone_url="$(build_repo_url)"
     clean_url="$(repo_clean_url)"
@@ -553,22 +576,6 @@ patch_runtime_service_scripts() {
         -e 's#HOME_SERVER_EXEC="/usr/bin/java -jar \$JAR_PATH --server.port=18888 --ws.port=19999"#HOME_SERVER_EXEC="/usr/bin/java -jar \$JAR_PATH"#' \
         "$file"
     if [[ -f "$start_file" ]]; then
-        cat > "$start_file" <<'EOF'
-#!/bin/bash
-set -e
-
-JAR="home-server-0.0.1-SNAPSHOT.jar"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-JAR_PATH="$SCRIPT_DIR/$JAR"
-
-if [ ! -f "$JAR_PATH" ]; then
-    echo "[error] Missing $JAR_PATH"
-    exit 1
-fi
-
-echo "[start] home-server uses public ports 8888 / 9999 directly"
-exec java -jar "$JAR_PATH"
-EOF
         chmod +x "$start_file"
     fi
 }
@@ -647,12 +654,13 @@ inject_license_tag() {
 }
 
 install_license_runtime() {
-    local license_file host server group permanent
+    local license_file host server group permanent source_version
     license_file="$SITE_DIR/radar-license.js"
     host="$(license_host_value)"
     server="${LICENSE_SERVER%/}"
     group="$LICENSE_GROUP_URL"
     permanent="$LICENSE_PERMANENT"
+    source_version="$LICENSE_SOURCE_VERSION"
 
     if [[ "$permanent" == "1" ]]; then
         cat > "$license_file" <<'EOF'
@@ -672,7 +680,7 @@ EOF
 
     cat > "$license_file" <<'EOF'
 (function(){'use strict';
-var cfg={serverUrl:"__RADAR_LICENSE_SERVER__",host:"__RADAR_LICENSE_HOST__",mode:"ops",permanent:__RADAR_LICENSE_PERMANENT__,groupUrl:"__RADAR_LICENSE_GROUP_URL__",groupName:"王者雷达共享开黑组队群"};
+var cfg={serverUrl:"__RADAR_LICENSE_SERVER__",host:"__RADAR_LICENSE_HOST__",mode:"ops",permanent:__RADAR_LICENSE_PERMANENT__,sourceVersion:"__RADAR_LICENSE_SOURCE_VERSION__",groupUrl:"__RADAR_LICENSE_GROUP_URL__",groupName:"王者雷达共享开黑组队群"};
 var nativeInitApp=null,nativeInitWebSocket=null,authorized=!!cfg.permanent,trialOpen=false,checking=null,lastResult=null;
 var baseKey='wzry.server.license.'+(cfg.host||location.hostname||'server'),storageKey=baseKey+'.permanent',trialKey=baseKey+'.trialStart',trialMs=24*60*60*1000;
 function readPermanent(){try{return localStorage.getItem(storageKey)==='1';}catch(e){return false;}}
@@ -683,15 +691,17 @@ if(readPermanent())authorized=true;
 function esc(s){return String(s||'').replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function closeSocket(){try{if(window.socket&&window.socket.readyState!==3)window.socket.close();}catch(e){}}
 function removeNotice(){var old=document.getElementById('radarLicenseNotice');if(old)old.remove();}
+function showSourceUpdate(data){if(!cfg.sourceVersion||!data||!data.sourceVersion||String(data.sourceVersion)===String(cfg.sourceVersion))return;var old=document.getElementById('radarSourceUpdateNotice');if(old)return;var box=document.createElement('div');box.id='radarSourceUpdateNotice';box.style.cssText='position:fixed;right:14px;bottom:14px;z-index:2147483001;max-width:380px;background:rgba(15,23,42,.96);border:1px solid rgba(56,189,248,.45);border-radius:10px;color:#e0f2fe;padding:12px 14px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif;font-size:13px;line-height:1.55;box-shadow:0 14px 38px rgba(0,0,0,.34);';box.innerHTML='<b style="display:block;color:#67e8f9;margin-bottom:4px">检测到服务器源码有新版本</b><span>当前部署版本已不是最新，请到一键部署器重新部署或更新源码。</span><button type="button" style="float:right;margin-top:8px;height:28px;border:0;border-radius:6px;background:#38bdf8;color:#06111f;font-weight:700;padding:0 10px;cursor:pointer">知道了</button>';box.querySelector('button').onclick=function(){box.remove();};document.body.appendChild(box);}
+function checkSourceVersion(){var base=String(cfg.serverUrl||'').replace(/\/+$/,'');if(!base||!cfg.sourceVersion)return Promise.resolve(false);return fetch(base+'/api/source/version?_='+(Date.now()),{cache:'no-store'}).then(function(r){return r.json();}).then(function(data){showSourceUpdate(data);return true;}).catch(function(){return false;});}
 function showTrialNotice(message){trialOpen=true;var hours=Math.max(0,Math.ceil(trialLeft()/3600000));var old=document.getElementById('radarLicenseNotice');if(!old){old=document.createElement('div');old.id='radarLicenseNotice';old.style.cssText='position:fixed;left:12px;right:12px;top:12px;z-index:2147483000;background:rgba(15,23,42,.92);border:1px solid rgba(251,191,36,.55);border-radius:10px;color:#f8fafc;padding:10px 12px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif;font-size:13px;line-height:1.5;box-shadow:0 10px 28px rgba(0,0,0,.28);';document.body.appendChild(old);}old.innerHTML='当前服务器未授权，已开启 1 天试用，剩余约 <b style="color:#fde68a">'+hours+'</b> 小时。'+esc(message||'试用结束前请联系管理员授权。')+' <a href="'+esc(cfg.groupUrl||'#')+'" target="_blank" rel="noopener" style="color:#7dd3fc;font-weight:700">加入群聊找授权码</a>';return true;}
 function block(message){authorized=false;closeSocket();try{if(typeof window.updateConnectionStatus==='function')window.updateConnectionStatus('error','服务器未授权');}catch(e){}try{if(typeof window.showError==='function')window.showError('当前服务器未授权，请找管理员开通授权',10000);}catch(e){}var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();var box=document.createElement('div');box.id='radarLicenseBlocker';box.style.cssText='position:fixed;inset:0;z-index:2147483647;background:rgba(4,8,18,.92);display:flex;align-items:center;justify-content:center;padding:18px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif;color:#e8eefc;';box.innerHTML='<div style="width:min(520px,94vw);background:#111827;border:1px solid rgba(96,165,250,.35);border-radius:14px;padding:24px;box-shadow:0 24px 70px rgba(0,0,0,.45);text-align:center"><h2 style="margin:0 0 12px;font-size:24px;color:#fef3c7">试用已结束，需要授权</h2><p style="margin:0 0 18px;line-height:1.7;color:#cbd5e1">'+esc(message||'未授权试用期为 1 天，试用结束后需要授权才能继续使用。')+'</p><p style="margin:0 0 20px;line-height:1.7;color:#dbeafe">请点击链接加入群聊【'+esc(cfg.groupName||'王者雷达共享开黑组队群')+'】，找我获取授权码。</p><a href="'+esc(cfg.groupUrl||'#')+'" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;justify-content:center;height:42px;padding:0 18px;border-radius:8px;background:#38bdf8;color:#06111f;font-weight:800;text-decoration:none">加入群聊找授权码</a></div>';document.body.appendChild(box);return false;}
 function kickStart(){setTimeout(function(){try{if(window.CardAuth&&typeof window.CardAuth.refresh==='function'){window.CardAuth.refresh();setTimeout(function(){try{if(window.CardAuth&&typeof window.CardAuth.start==='function')window.CardAuth.start();else if(typeof nativeInitApp==='function')gated(nativeInitApp,window,[]);else if(typeof window.initApp==='function')window.initApp();else if(typeof nativeInitWebSocket==='function')gated(nativeInitWebSocket,window,[]);else if(typeof window.initWebSocket==='function')window.initWebSocket();}catch(e){}},300);return;}if(typeof nativeInitApp==='function')gated(nativeInitApp,window,[]);else if(typeof window.initApp==='function')window.initApp();else if(typeof nativeInitWebSocket==='function')gated(nativeInitWebSocket,window,[]);else if(typeof window.initWebSocket==='function')window.initWebSocket();}catch(e){}},0);}
-function allow(data){authorized=true;trialOpen=false;lastResult=data||{};var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();removeNotice();if(data&&data.permanent)savePermanent();kickStart();return true;}
+function allow(data){authorized=true;trialOpen=false;lastResult=data||{};var old=document.getElementById('radarLicenseBlocker');if(old)old.remove();removeNotice();if(data&&data.permanent)savePermanent();showSourceUpdate(data);kickStart();return true;}
 function allowTrial(data){lastResult=data||{};if(trialLeft()>0)return showTrialNotice(data&&data.message?data.message:'试用结束前请联系管理员授权。');return block(data&&data.message?data.message:'未授权试用已结束，需要授权后才能继续使用。');}
 function checkLicense(force){if(authorized&&!force)return Promise.resolve(true);if(cfg.permanent||readPermanent())return Promise.resolve(allow({permanent:true,local:true}));if(checking)return checking;var url=String(cfg.serverUrl||'').replace(/\/+$/,'')+'/api/license/check?host='+encodeURIComponent(cfg.host||location.hostname||'')+'&domain='+encodeURIComponent(location.hostname||'')+'&mode='+encodeURIComponent(cfg.mode||'all')+'&_='+(Date.now());checking=fetch(url,{cache:'no-store'}).then(function(r){return r.json();}).then(function(data){checking=null;if(data&&data.authorized)return allow(data);return allowTrial(data||{});}).catch(function(){checking=null;return allowTrial({message:'授权服务器暂时连接失败，试用期内仍可使用；请尽快联系管理员授权。'});});return checking;}
 function gated(fn,ctx,args){if(authorized||trialOpen||cfg.permanent||readPermanent()||trialLeft()>0)return fn.apply(ctx,args);checkLicense(false).then(function(ok){if(ok)return fn.apply(ctx,args);});return undefined;}
 function wrap(){if(typeof window.initApp==='function'&&!window.initApp.__licenseWrapped){nativeInitApp=window.initApp;window.initApp=function(){return gated(nativeInitApp,this,arguments);};window.initApp.__licenseWrapped=true;}if(typeof window.initWebSocket==='function'&&!window.initWebSocket.__licenseWrapped){nativeInitWebSocket=window.initWebSocket;window.initWebSocket=function(){return gated(nativeInitWebSocket,this,arguments);};window.initWebSocket.__licenseWrapped=true;}}
-wrap();setTimeout(wrap,0);document.addEventListener('DOMContentLoaded',function(){wrap();checkLicense(false).then(function(ok){if(ok)kickStart();});});if(!cfg.permanent){setInterval(function(){checkLicense(true);},60000);setInterval(function(){if(!authorized&&trialLeft()<=0)block('未授权试用已结束，需要授权后才能继续使用。');else if(!authorized)showTrialNotice('试用结束前请联系管理员授权。');},300000);}
+wrap();setTimeout(wrap,0);document.addEventListener('DOMContentLoaded',function(){wrap();checkSourceVersion();checkLicense(false).then(function(ok){if(ok)kickStart();});});if(!cfg.permanent){setInterval(function(){checkLicense(true);},60000);setInterval(function(){if(!authorized&&trialLeft()<=0)block('未授权试用已结束，需要授权后才能继续使用。');else if(!authorized)showTrialNotice('试用结束前请联系管理员授权。');},300000);}
 window.RadarServerLicense={check:checkLicense,isAuthorized:function(){return authorized;},last:function(){return lastResult;},showBlock:block};
 })();
 EOF
@@ -699,6 +709,7 @@ EOF
         -e "s|__RADAR_LICENSE_SERVER__|$(sed_replacement_escape "$(json_escape "$server")")|g" \
         -e "s|__RADAR_LICENSE_HOST__|$(sed_replacement_escape "$(json_escape "$host")")|g" \
         -e "s|__RADAR_LICENSE_GROUP_URL__|$(sed_replacement_escape "$(json_escape "$group")")|g" \
+        -e "s|__RADAR_LICENSE_SOURCE_VERSION__|$(sed_replacement_escape "$(json_escape "$source_version")")|g" \
         -e "s|__RADAR_LICENSE_PERMANENT__|$( [[ "$permanent" == "1" ]] && printf true || printf false )|g" \
         "$license_file"
     chmod 644 "$license_file"
@@ -938,6 +949,9 @@ install_runtime_services() {
     fi
     green "正在搭建 JAVA 端和 WebSocket 服务..."
     [[ -f "$SITE_DIR/install-services.sh" ]] || die "未找到 $SITE_DIR/install-services.sh"
+    export LICENSE_SERVER="${LICENSE_SERVER%/}"
+    export LICENSE_HOST="$(license_host_value)"
+    export LICENSE_MODE="ops"
     bash "$SITE_DIR/install-services.sh" "$SITE_DIR"
     green "JAVA 端搭建完成"
 }

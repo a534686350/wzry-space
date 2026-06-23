@@ -2,7 +2,7 @@
 
 这个守护脚本用于 Ubuntu/宝塔服务器：
 
-- 把 `home-server-0.0.1-SNAPSHOT.jar` 注册成 `systemd` 服务
+- 把 `wz.jar` 注册成 `systemd` 服务
 - 每 30 秒检测一次本机 `127.0.0.1:8888`
 - 如果 8888 连不上，自动重启 Java 后端
 - 日志写入 `logs/home-server-watchdog.log`

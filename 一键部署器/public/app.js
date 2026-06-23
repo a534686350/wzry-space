@@ -41,6 +41,7 @@
         connState:       $('#connState'),
         pwIcon:          $('#pwIcon'),
         deployCard:      $('#f-deploy-card'),
+        deployCardInfo:  $('#deployCardInfo'),
         cardAdminField:  $('#cardAdminField'),
         cardAdminPass:   $('#f-card-admin-password'),
         opsConfig:       $('#opsConfig'),
@@ -66,6 +67,7 @@
     // ------------------------------------------------------------------
     renderSteps();
     bindDeployMode();
+    bindDeployCardCheck();
     bootMeta();
 
     function bindDeployMode() {
@@ -87,6 +89,49 @@
         const mode = document.querySelector('input[name="deployMode"]:checked');
         const isOps = mode && mode.value === 'ops';
         if (els.opsInstallCode) els.opsInstallCode.required = !!(isOps && state.opsInstallCodeRequired);
+    }
+
+    function bindDeployCardCheck() {
+        if (!els.deployCard || !els.deployCardInfo) return;
+        let timer = null;
+        let requestId = 0;
+        const clear = () => {
+            els.deployCardInfo.className = 'deploy-card-info full';
+            els.deployCardInfo.textContent = '';
+        };
+        const check = async () => {
+            const code = String(els.deployCard.value || '').trim();
+            requestId += 1;
+            const current = requestId;
+            if (!code) {
+                clear();
+                return;
+            }
+            els.deployCardInfo.className = 'deploy-card-info full';
+            els.deployCardInfo.textContent = '正在查询卡密剩余次数...';
+            try {
+                const res = await fetch('/api/deploy-card/check?code=' + encodeURIComponent(code), { cache: 'no-store' });
+                const data = await res.json().catch(() => ({}));
+                if (current !== requestId) return;
+                if (!res.ok || !data.ok) {
+                    els.deployCardInfo.className = 'deploy-card-info full fail';
+                    els.deployCardInfo.textContent = data.message || '卡密无效或次数已用完';
+                    return;
+                }
+                const card = data.card || {};
+                els.deployCardInfo.className = 'deploy-card-info full ok';
+                els.deployCardInfo.textContent = '剩余次数 ' + Number(card.remainingUses || 0) + ' / 总次数 ' + Number(card.maxUses || 1);
+            } catch (err) {
+                if (current !== requestId) return;
+                els.deployCardInfo.className = 'deploy-card-info full fail';
+                els.deployCardInfo.textContent = '卡密查询失败，请稍后重试';
+            }
+        };
+        els.deployCard.addEventListener('input', () => {
+            window.clearTimeout(timer);
+            timer = window.setTimeout(check, 350);
+        });
+        els.deployCard.addEventListener('blur', check);
     }
 
     async function bootMeta() {
